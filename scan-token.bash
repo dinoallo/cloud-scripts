@@ -114,28 +114,40 @@ fi
 
 echo "Scanning for token (masked): $(mask "$TOKEN")"
 
-echo "Scanning ConfigMaps..."
-# Scan ConfigMaps: check if any data value contains the token
-kubectl get configmaps "${KUBE_ARGS[@]}" -o json | \
-	jq -r --arg token "$TOKEN" '.items[] | .metadata as $m | (.data // {}) | to_entries[] | select(.value | index($token)) | ["configmap", $m.namespace, $m.name, .key] | @tsv' | \
-	while IFS=$'\t' read -r kind ns name key; do
-		report "ConfigMap $ns/$name key=$key contains token"
-	done
+# Prefetch ConfigMaps and Secrets into temp files (base64-encoded values)
+CM_TMP=$(mktemp)
+SECRET_TMP=$(mktemp)
+trap 'rm -f "$CM_TMP" "$SECRET_TMP"' EXIT
 
-echo "Scanning Secrets..."
-# Scan Secrets: decode each .data value and look for token
+echo "Prefetching ConfigMaps and Secrets (reduces per-ref kubectl calls)..."
+# ConfigMaps: store namespace, name, key, base64(value)
+kubectl get configmaps "${KUBE_ARGS[@]}" -o json | \
+	jq -r '.items[] | .metadata as $m | (.data // {}) | to_entries[] | [$m.namespace,$m.name,.key,(.value|@base64)] | @tsv' > "$CM_TMP"
+
+# Secrets: store namespace, name, key, base64(value) (value already base64 in secret.data)
 kubectl get secrets "${KUBE_ARGS[@]}" -o json | \
-	jq -r '.items[] | .metadata as $m | (.data // {}) | to_entries[] | [$m.namespace,$m.name,.key,.value] | @tsv' | \
-	while IFS=$'\t' read -r ns name key b64val; do
-		if [[ -z "$b64val" ]]; then continue; fi
-		if echo "$b64val" | base64 --decode 2>/dev/null | grep -a -F -- "$TOKEN" >/dev/null 2>&1; then
-			report "Secret $ns/$name key=$key contains token (decoded)"
-		fi
-		# Also check base64 representation match
-		if [[ "$b64val" == "$TOKEN_B64" ]]; then
-			report "Secret $ns/$name key=$key stores the token (base64 match)"
-		fi
-	done
+	jq -r '.items[] | .metadata as $m | (.data // {}) | to_entries[] | [$m.namespace,$m.name,.key,.value] | @tsv' > "$SECRET_TMP"
+
+echo "Scanning ConfigMaps from cache..."
+# Scan cached ConfigMaps for token
+while IFS=$'\t' read -r ns name key b64val; do
+	if echo "$b64val" | base64 --decode 2>/dev/null | grep -a -F -- "$TOKEN" >/dev/null 2>&1; then
+		report "ConfigMap $ns/$name key=$key contains token"
+	fi
+done < "$CM_TMP"
+
+echo "Scanning Secrets from cache..."
+# Scan cached Secrets for token
+while IFS=$'\t' read -r ns name key b64val; do
+	if [[ -z "$b64val" ]]; then continue; fi
+	if echo "$b64val" | base64 --decode 2>/dev/null | grep -a -F -- "$TOKEN" >/dev/null 2>&1; then
+		report "Secret $ns/$name key=$key contains token (decoded)"
+	fi
+	# Also check base64 representation match
+	if [[ "$b64val" == "$TOKEN_B64" ]]; then
+		report "Secret $ns/$name key=$key stores the token (base64 match)"
+	fi
+done < "$SECRET_TMP"
 
 echo "Scanning Pods' environment variables and references..."
 # 1) Direct env values in containers and initContainers
@@ -156,10 +168,12 @@ kubectl get pods "${KUBE_ARGS[@]}" -o json | \
 		cmname=$(echo "$j" | jq -r '.env.valueFrom.configMapKeyRef.name // empty') || true
 		cmkey=$(echo "$j" | jq -r '.env.valueFrom.configMapKeyRef.key // empty') || true
 		if [[ -n "$cmname" ]]; then
-			# get the key value
-			val=$(kubectl get configmap -n "$ns" "$cmname" -o json 2>/dev/null | jq -r --arg key "$cmkey" '.data[$key] // empty') || true
-			if [[ -n "$val" ]] && [[ "$val" == *"$TOKEN"* ]]; then
-				report "Pod $ns/$pod container=$container envFrom configMapKeyRef $cmname/$cmkey contains token"
+			# lookup the key value from cached configmaps
+			b64val=$(awk -F"\t" -v N="$ns" -v CM="$cmname" -v K="$cmkey" '$1==N && $2==CM && $3==K {print $4; exit}' "$CM_TMP" || true)
+			if [[ -n "$b64val" ]]; then
+				if echo "$b64val" | base64 --decode 2>/dev/null | grep -a -F -- "$TOKEN" >/dev/null 2>&1; then
+					report "Pod $ns/$pod container=$container envFrom configMapKeyRef $cmname/$cmkey contains token"
+				fi
 			fi
 		fi
 
@@ -167,7 +181,8 @@ kubectl get pods "${KUBE_ARGS[@]}" -o json | \
 		sname=$(echo "$j" | jq -r '.env.valueFrom.secretKeyRef.name // empty') || true
 		skey=$(echo "$j" | jq -r '.env.valueFrom.secretKeyRef.key // empty') || true
 		if [[ -n "$sname" ]]; then
-			b64=$(kubectl get secret -n "$ns" "$sname" -o json 2>/dev/null | jq -r --arg key "$skey" '.data[$key] // empty') || true
+			# lookup secret key from cached secrets
+			b64=$(awk -F"\t" -v N="$ns" -v S="$sname" -v K="$skey" '$1==N && $2==S && $3==K {print $4; exit}' "$SECRET_TMP" || true)
 			if [[ -n "$b64" ]]; then
 				if echo "$b64" | base64 --decode 2>/dev/null | grep -a -F -- "$TOKEN" >/dev/null 2>&1; then
 					report "Pod $ns/$pod container=$container envFrom secretKeyRef $sname/$skey contains token (decoded)"
@@ -189,22 +204,25 @@ kubectl get pods "${KUBE_ARGS[@]}" -o json | \
 		cmref=$(echo "$j" | jq -r '.ref.configMapRef.name // empty') || true
 		sref=$(echo "$j" | jq -r '.ref.secretRef.name // empty') || true
 		if [[ -n "$cmref" ]]; then
-			# iterate configmap data
-			kubectl get configmap -n "$ns" "$cmref" -o json 2>/dev/null | jq -r --arg token "$TOKEN" '.data // {} | to_entries[] | select(.value | index($token)) | .key' | \
-				while read -r key; do
+			# find keys in cached configmaps for this configmap that contain the token
+			awk -F"\t" -v N="$ns" -v CM="$cmref" '$1==N && $2==CM {print $3 "\t" $4}' "$CM_TMP" | \
+			while IFS=$'\t' read -r key b64val; do
+				if echo "$b64val" | base64 --decode 2>/dev/null | grep -a -F -- "$TOKEN" >/dev/null 2>&1; then
 					report "Pod $ns/$pod container=$container envFrom configMapRef $cmref key=$key contains token"
-				done
+				fi
+			done
 		fi
 		if [[ -n "$sref" ]]; then
-			kubectl get secret -n "$ns" "$sref" -o json 2>/dev/null | jq -r '.data // {} | to_entries[] | [.key,.value] | @tsv' | \
-				while IFS=$'\t' read -r key b64val; do
-					if echo "$b64val" | base64 --decode 2>/dev/null | grep -a -F -- "$TOKEN" >/dev/null 2>&1; then
-						report "Pod $ns/$pod container=$container envFrom secretRef $sref key=$key contains token (decoded)"
-					fi
-					if [[ "$b64val" == "$TOKEN_B64" ]]; then
-						report "Pod $ns/$pod container=$container envFrom secretRef $sref key=$key stores token (base64 match)"
-					fi
-				done
+			# find keys in cached secrets for this secret and check
+			awk -F"\t" -v N="$ns" -v S="$sref" '$1==N && $2==S {print $3 "\t" $4}' "$SECRET_TMP" | \
+			while IFS=$'\t' read -r key b64val; do
+				if echo "$b64val" | base64 --decode 2>/dev/null | grep -a -F -- "$TOKEN" >/dev/null 2>&1; then
+					report "Pod $ns/$pod container=$container envFrom secretRef $sref key=$key contains token (decoded)"
+				fi
+				if [[ "$b64val" == "$TOKEN_B64" ]]; then
+					report "Pod $ns/$pod container=$container envFrom secretRef $sref key=$key stores token (base64 match)"
+				fi
+			done
 		fi
 	done
 
