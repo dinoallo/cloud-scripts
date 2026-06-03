@@ -29,6 +29,8 @@ jobs:
             image: scan-token
           - app_dir: check-non-default-sa-token
             image: check-non-default-sa-token
+          - app_dir: check-kubeconfig-in-config
+            image: check-kubeconfig-in-config
     steps:
       - name: Checkout
         uses: actions/checkout@v4

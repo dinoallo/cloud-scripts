@@ -23,6 +23,7 @@ jobs:
         module:
           - scan-token
           - check-non-default-sa-token
+          - check-kubeconfig-in-config
     steps:
       - name: Checkout
         uses: actions/checkout@v4
