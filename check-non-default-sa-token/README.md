@@ -1,0 +1,54 @@
+# check-non-default-sa-token
+
+Scan Kubernetes Pods and report applications whose Pods use a non-default ServiceAccount token. An application is grouped by the Pod controller owner, with ReplicaSets promoted to Deployments and Jobs promoted to CronJobs.
+
+## Build
+
+```bash
+go build -o check-non-default-sa-token .
+```
+
+## Usage
+
+```bash
+./check-non-default-sa-token
+./check-non-default-sa-token --namespace prod
+./check-non-default-sa-token --context my-cluster --output json --include-pods
+```
+
+The scanner checks:
+
+- Pods whose `serviceAccountName` is not `default` and whose effective `automountServiceAccountToken` is enabled.
+- Pods with projected `serviceAccountToken` volumes for a non-default Pod ServiceAccount.
+- Legacy `kubernetes.io/service-account-token` Secret volumes when Secret inspection is permitted.
+
+Use `--skip-secret-inspection` when the kubeconfig should not read Secrets. Without Secret access, the scanner still detects normal non-default ServiceAccount token use from Pod and ServiceAccount specs, but may miss manually mounted legacy token Secrets.
+
+## RBAC
+
+Minimum read permissions for normal detection:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: check-non-default-sa-token
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "serviceaccounts"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["list"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["list"]
+```
+
+Add this rule for legacy Secret token volume attribution:
+
+```yaml
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["list"]
+```
