@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - scan-token
+          - check-non-default-sa-token
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: Download dependencies
+        working-directory: ${{ matrix.module }}
+        run: go mod download
+
+      - name: Test
+        working-directory: ${{ matrix.module }}
+        run: go test ./...
+
+      - name: Build
+        working-directory: ${{ matrix.module }}
+        run: go build -o /tmp/${{ matrix.module }} .
