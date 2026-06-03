@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -113,7 +114,7 @@ func TestRunRejectsEmptyToken(t *testing.T) {
 	var stdout strings.Builder
 	var stderr strings.Builder
 
-	code := run(t.Context(), []string{"-t", ""}, &stdout, &stderr)
+	code := run(context.Background(), []string{"-t", ""}, &stdout, &stderr)
 
 	if code != 2 {
 		t.Fatalf("expected exit code 2, got %d", code)

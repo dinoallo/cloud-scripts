@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -15,7 +16,7 @@ func TestRunPrintsHelpWithoutError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	if err := run(t.Context(), []string{"--help"}, &stdout, &stderr); err != nil {
+	if err := run(context.Background(), []string{"--help"}, &stdout, &stderr); err != nil {
 		t.Fatalf("expected help to return no error, got %v", err)
 	}
 	if stdout.Len() == 0 {
