@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: check-non-default-sa-token
+  namespace: check-non-default-sa-token
+  labels:
+    app.kubernetes.io/name: check-non-default-sa-token
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: check-non-default-sa-token
+        spec:
+          serviceAccountName: check-non-default-sa-token
+          restartPolicy: Never
+          containers:
+            - name: scanner
+              image: ghcr.io/dinoallo/check-non-default-sa-token:latest
+              imagePullPolicy: IfNotPresent
+              args:
+                - --output
+                - json
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                seccompProfile:
+                  type: RuntimeDefault

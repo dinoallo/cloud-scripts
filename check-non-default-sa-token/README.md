@@ -16,6 +16,23 @@ go build -o check-non-default-sa-token .
 ./check-non-default-sa-token --context my-cluster --output json --include-pods
 ```
 
+## Kubernetes
+
+Run the scanner in-cluster as a one-shot Job:
+
+```bash
+kubectl apply -k deploy
+kubectl logs -n check-non-default-sa-token job/check-non-default-sa-token
+```
+
+The same deployment directory also includes a CronJob that runs daily at 02:00 cluster time:
+
+```bash
+kubectl get cronjob -n check-non-default-sa-token check-non-default-sa-token
+```
+
+See [deploy/README.md](deploy/README.md) for image override and RBAC notes.
+
 The scanner checks:
 
 - Pods whose `serviceAccountName` is not `default` and whose effective `automountServiceAccountToken` is enabled.

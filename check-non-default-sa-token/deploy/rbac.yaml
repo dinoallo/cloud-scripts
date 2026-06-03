@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: check-non-default-sa-token
+  namespace: check-non-default-sa-token
+  labels:
+    app.kubernetes.io/name: check-non-default-sa-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: check-non-default-sa-token
+  labels:
+    app.kubernetes.io/name: check-non-default-sa-token
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "serviceaccounts", "secrets"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["list"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: check-non-default-sa-token
+  labels:
+    app.kubernetes.io/name: check-non-default-sa-token
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: check-non-default-sa-token
+subjects:
+  - kind: ServiceAccount
+    name: check-non-default-sa-token
+    namespace: check-non-default-sa-token
