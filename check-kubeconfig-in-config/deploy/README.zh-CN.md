@@ -17,6 +17,12 @@ kubectl create job -n check-kubeconfig-in-config --from=cronjob/check-kubeconfig
 kubectl logs -n check-kubeconfig-in-config job/check-kubeconfig-in-config-manual
 ```
 
+Job 和 CronJob 日志使用扫描器默认的 CSV 输出：
+
+```text
+namespace,ownerKind,ownerName,serviceAccounts
+```
+
 如需用相同名称重新运行一次性 Job，先删除旧 Job：
 
 ```bash
@@ -36,4 +42,4 @@ ghcr.io/dinoallo/check-kubeconfig-in-config:latest
 kustomize edit set image ghcr.io/dinoallo/check-kubeconfig-in-config=ghcr.io/YOUR_ORG/check-kubeconfig-in-config:TAG
 ```
 
-RBAC 默认包含 Secret 只读权限，因此扫描器可以检查存放在 Secret 中的 kubeconfig 内容。如果集群不允许读取 Secret，可以从 `rbac.yaml` 移除 `secrets` 规则，并在 Job 或 CronJob 参数中加入 `--skip-secret-inspection`。没有 Secret 权限时，扫描器仍会检查 ConfigMap 并归属到引用这些 ConfigMap 的应用。
+RBAC 默认包含 Secret 只读权限，因此扫描器可以检查存放在 Secret 中的 kubeconfig 内容。如果集群不允许读取 Secret，可以从 `rbac.yaml` 移除 `secrets` 资源，并在 Job 或 CronJob 参数中加入 `--skip-secret-inspection`。没有 Secret 权限时，扫描器仍会检查 ConfigMap 并归属到引用这些 ConfigMap 的应用。

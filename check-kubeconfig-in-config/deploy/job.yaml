@@ -19,9 +19,6 @@ spec:
         - name: scanner
           image: ghcr.io/dinoallo/check-kubeconfig-in-config:latest
           imagePullPolicy: IfNotPresent
-          args:
-            - --output
-            - json
           resources:
             requests:
               cpu: 20m

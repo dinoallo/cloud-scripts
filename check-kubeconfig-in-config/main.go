@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,16 +17,17 @@ import (
 	"text/tabwriter"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 )
 
-const appName = "check-kubeconfig-in-config"
+const (
+	appName               = "check-kubeconfig-in-config"
+	defaultServiceAccount = "default"
+)
 
 type options struct {
 	kubeconfig          string
@@ -47,6 +49,7 @@ type applicationFinding struct {
 	Namespace       string                  `json:"namespace"`
 	OwnerKind       string                  `json:"ownerKind"`
 	OwnerName       string                  `json:"ownerName"`
+	ServiceAccounts []string                `json:"serviceAccounts"`
 	PodCount        int                     `json:"podCount"`
 	SamplePods      []string                `json:"samplePods"`
 	ConfigResources []configResourceFinding `json:"configResources"`
@@ -91,11 +94,12 @@ type detectedConfigResource struct {
 }
 
 type appAccumulator struct {
-	namespace string
-	ownerKind string
-	ownerName string
-	pods      map[string]podFindingDetails
-	resources map[configResourceKey]*configResourceAccumulator
+	namespace       string
+	ownerKind       string
+	ownerName       string
+	serviceAccounts map[string]struct{}
+	pods            map[string]podFindingDetails
+	resources       map[configResourceKey]*configResourceAccumulator
 }
 
 type configResourceAccumulator struct {
@@ -106,11 +110,6 @@ type configResourceAccumulator struct {
 type podConfigReference struct {
 	key     configResourceKey
 	sources map[string]struct{}
-}
-
-type ownerResolver struct {
-	replicaSetOwners map[types.NamespacedName]*metav1.OwnerReference
-	jobOwners        map[types.NamespacedName]*metav1.OwnerReference
 }
 
 func main() {
@@ -165,7 +164,7 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 	fs.StringVar(&opts.kubeconfig, "kubeconfig", defaultKubeconfig, "path to kubeconfig; falls back to in-cluster config when unavailable")
 	fs.StringVar(&opts.contextName, "context", "", "kubeconfig context to use")
 	fs.StringVar(&opts.namespace, "namespace", metav1.NamespaceAll, "namespace to scan; empty means all namespaces")
-	fs.StringVar(&opts.output, "output", "table", "output format: table or json")
+	fs.StringVar(&opts.output, "output", "csv", "output format: csv, table, or json")
 	fs.IntVar(&opts.maxSamples, "max-samples", 5, "maximum pod names to show per application in table output")
 	fs.BoolVar(&opts.skipSecretInspect, "skip-secret-inspection", false, "skip listing Secrets")
 	fs.BoolVar(&opts.includePodBreakdown, "include-pods", false, "include per-pod details in JSON output")
@@ -176,8 +175,8 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 	if fs.NArg() > 0 {
 		return opts, fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
 	}
-	if opts.output != "table" && opts.output != "json" {
-		return opts, fmt.Errorf("unsupported output %q; use table or json", opts.output)
+	if opts.output != "csv" && opts.output != "table" && opts.output != "json" {
+		return opts, fmt.Errorf("unsupported output %q; use csv, table, or json", opts.output)
 	}
 	if opts.maxSamples < 1 {
 		return opts, errors.New("--max-samples must be greater than zero")
@@ -246,9 +245,6 @@ func scanCluster(ctx context.Context, client kubernetes.Interface, opts options)
 		return result, fmt.Errorf("list pods: %w", err)
 	}
 
-	resolver, ownerWarnings := loadOwnerResolver(ctx, client, opts.namespace)
-	result.Warnings = append(result.Warnings, ownerWarnings...)
-
 	apps := map[ownerKey]*appAccumulator{}
 	referencedResources := map[configResourceKey]struct{}{}
 
@@ -267,15 +263,16 @@ func scanCluster(ctx context.Context, client kubernetes.Interface, opts options)
 			}
 
 			if app == nil {
-				owner := resolver.resolvePodOwner(pod)
+				owner := resolvePodOwner(pod)
 				app = apps[owner]
 				if app == nil {
 					app = &appAccumulator{
-						namespace: owner.Namespace,
-						ownerKind: owner.Kind,
-						ownerName: owner.Name,
-						pods:      map[string]podFindingDetails{},
-						resources: map[configResourceKey]*configResourceAccumulator{},
+						namespace:       owner.Namespace,
+						ownerKind:       owner.Kind,
+						ownerName:       owner.Name,
+						serviceAccounts: map[string]struct{}{},
+						pods:            map[string]podFindingDetails{},
+						resources:       map[configResourceKey]*configResourceAccumulator{},
 					}
 					apps[owner] = app
 				}
@@ -298,6 +295,7 @@ func scanCluster(ctx context.Context, client kubernetes.Interface, opts options)
 		}
 
 		if app != nil && len(podResources) > 0 {
+			app.serviceAccounts[podServiceAccount(pod)] = struct{}{}
 			sortConfigResourceFindings(podResources)
 			app.pods[pod.Name] = podFindingDetails{
 				Name:            pod.Name,
@@ -518,63 +516,32 @@ func collectContainerConfigReferences(add func(string, string, string), containe
 	}
 }
 
-func loadOwnerResolver(ctx context.Context, client kubernetes.Interface, namespace string) (ownerResolver, []string) {
-	resolver := ownerResolver{
-		replicaSetOwners: map[types.NamespacedName]*metav1.OwnerReference{},
-		jobOwners:        map[types.NamespacedName]*metav1.OwnerReference{},
-	}
-	var warnings []string
-
-	replicaSets, err := client.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("could not list ReplicaSets; Deployment-owned pods may be reported as ReplicaSets: %v", err))
-	} else {
-		for _, replicaSet := range replicaSets.Items {
-			resolver.replicaSetOwners[namespacedName(replicaSet.Namespace, replicaSet.Name)] = controllerOwner(&replicaSet.ObjectMeta)
-		}
-	}
-
-	jobs, err := client.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			warnings = append(warnings, fmt.Sprintf("could not list Jobs; CronJob-owned pods may be reported as Jobs: %v", err))
-		}
-	} else {
-		for _, job := range jobs.Items {
-			resolver.jobOwners[namespacedName(job.Namespace, job.Name)] = controllerOwner(&job.ObjectMeta)
-		}
-	}
-
-	return resolver, warnings
-}
-
-func (resolver ownerResolver) resolvePodOwner(pod corev1.Pod) ownerKey {
-	owner := controllerOwner(&pod.ObjectMeta)
+func resolvePodOwner(pod corev1.Pod) ownerKey {
+	owner := podOwner(&pod.ObjectMeta)
 	if owner == nil {
 		return ownerKey{Namespace: pod.Namespace, Kind: "Pod", Name: pod.Name}
 	}
-
-	switch owner.Kind {
-	case "ReplicaSet":
-		if parent := resolver.replicaSetOwners[namespacedName(pod.Namespace, owner.Name)]; parent != nil && parent.Kind == "Deployment" {
-			return ownerKey{Namespace: pod.Namespace, Kind: parent.Kind, Name: parent.Name}
-		}
-	case "Job":
-		if parent := resolver.jobOwners[namespacedName(pod.Namespace, owner.Name)]; parent != nil && parent.Kind == "CronJob" {
-			return ownerKey{Namespace: pod.Namespace, Kind: parent.Kind, Name: parent.Name}
-		}
-	}
-
 	return ownerKey{Namespace: pod.Namespace, Kind: owner.Kind, Name: owner.Name}
 }
 
-func controllerOwner(meta *metav1.ObjectMeta) *metav1.OwnerReference {
+func podOwner(meta *metav1.ObjectMeta) *metav1.OwnerReference {
 	ref := metav1.GetControllerOf(meta)
-	if ref == nil {
+	if ref != nil {
+		copied := *ref
+		return &copied
+	}
+	if len(meta.OwnerReferences) == 0 {
 		return nil
 	}
-	copied := *ref
+	copied := meta.OwnerReferences[0]
 	return &copied
+}
+
+func podServiceAccount(pod corev1.Pod) string {
+	if pod.Spec.ServiceAccountName == "" {
+		return defaultServiceAccount
+	}
+	return pod.Spec.ServiceAccountName
 }
 
 func flattenApplications(apps map[ownerKey]*appAccumulator, opts options) []applicationFinding {
@@ -585,6 +552,7 @@ func flattenApplications(apps map[ownerKey]*appAccumulator, opts options) []appl
 			Namespace:       app.namespace,
 			OwnerKind:       app.ownerKind,
 			OwnerName:       app.ownerName,
+			ServiceAccounts: sortedSet(app.serviceAccounts),
 			PodCount:        len(app.pods),
 			SamplePods:      trimStrings(podNames, opts.maxSamples),
 			ConfigResources: flattenConfigResourceAccumulators(app.resources),
@@ -655,6 +623,8 @@ func unreferencedConfigResources(resources map[configResourceKey]detectedConfigR
 
 func writeResult(w io.Writer, result scanResult, opts options) error {
 	switch opts.output {
+	case "csv":
+		return writeCSV(w, result)
 	case "json":
 		encoder := json.NewEncoder(w)
 		encoder.SetIndent("", "  ")
@@ -664,6 +634,25 @@ func writeResult(w io.Writer, result scanResult, opts options) error {
 	default:
 		return fmt.Errorf("unsupported output %q", opts.output)
 	}
+}
+
+func writeCSV(w io.Writer, result scanResult) error {
+	writer := csv.NewWriter(w)
+	if err := writer.Write([]string{"namespace", "ownerKind", "ownerName", "serviceAccounts"}); err != nil {
+		return err
+	}
+	for _, item := range result.Items {
+		if err := writer.Write([]string{
+			item.Namespace,
+			item.OwnerKind,
+			item.OwnerName,
+			strings.Join(item.ServiceAccounts, ","),
+		}); err != nil {
+			return err
+		}
+	}
+	writer.Flush()
+	return writer.Error()
 }
 
 func writeTable(w io.Writer, result scanResult) error {
@@ -716,10 +705,6 @@ func formatKubeconfigKeys(keys []kubeconfigKeyFinding) string {
 		parts = append(parts, fmt.Sprintf("%s:%s", key.Key, key.Encoding))
 	}
 	return strings.Join(parts, ",")
-}
-
-func namespacedName(namespace, name string) types.NamespacedName {
-	return types.NamespacedName{Namespace: namespace, Name: name}
 }
 
 func sortedStringKeys[V any](m map[string]V) []string {

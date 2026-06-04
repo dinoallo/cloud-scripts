@@ -1,6 +1,6 @@
 # check-kubeconfig-in-config
 
-扫描 Kubernetes ConfigMap 和 Secret 中的 kubeconfig 内容，并报告引用这些资源的应用。应用按 Pod 的 controller owner 聚合，ReplicaSet 会上归为 Deployment，Job 会上归为 CronJob。
+扫描 Kubernetes ConfigMap 和 Secret 中的 kubeconfig 内容，并报告引用这些资源的应用。应用按 Pod 的 ownerReference 聚合。扫描器优先使用 `controller=true` 的 ownerReference；没有 controller owner 时使用第一个 ownerReference；没有 ownerReference 时按 `Pod/<name>` 输出。
 
 扫描器会使用 client-go 解析 kubeconfig；当内容包含 cluster 和 context 条目时判定为 kubeconfig。检查范围包括：
 
@@ -45,21 +45,20 @@ kubectl get cronjob -n check-kubeconfig-in-config check-kubeconfig-in-config
 - `--kubeconfig` kubeconfig 路径；不可用时回退到 in-cluster config
 - `--context` 要使用的 kubeconfig context
 - `--namespace` 要扫描的 namespace；空值表示所有 namespace
-- `--output` 输出格式：`table` 或 `json`
+- `--output` 输出格式：`csv`、`table` 或 `json`
 - `--include-pods` 在 JSON 输出中包含逐 Pod 明细
 - `--max-samples` table 输出中每个应用最多展示的 Pod 样例数量
 - `--skip-secret-inspection` 跳过 Secret 列表和内容检查
 
 ## 输出
 
-Table 输出会列出引用了含 kubeconfig 的 ConfigMap 或 Secret 的应用：
+默认输出为 CSV，包含以下列：
 
 ```text
-NAMESPACE  OWNER           CONFIG_RESOURCES                         PODS  SAMPLE_PODS
-prod       Deployment/api  ConfigMap/kubeconfigs[admin.conf:plain]  2     api-0,api-1
+namespace,ownerKind,ownerName,serviceAccounts
 ```
 
-JSON 输出还会包含 `unreferencedResources`，用于展示扫描到含 kubeconfig 但未被任何 Pod 引用的 ConfigMap 或 Secret。
+使用 `--output table` 可以输出包含配置资源和 Pod 样例的更宽表格。JSON 输出还会包含 `unreferencedResources`，用于展示扫描到含 kubeconfig 但未被任何 Pod 引用的 ConfigMap 或 Secret。
 
 ## RBAC
 
@@ -73,12 +72,6 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods", "configmaps"]
-    verbs: ["list"]
-  - apiGroups: ["apps"]
-    resources: ["replicasets"]
-    verbs: ["list"]
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
     verbs: ["list"]
 ```
 

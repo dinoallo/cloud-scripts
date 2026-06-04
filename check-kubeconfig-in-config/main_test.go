@@ -1,12 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"strings"
 	"testing"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -44,6 +44,51 @@ func TestRunPrintsHelpWithoutError(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("expected no stderr, got %q", stderr.String())
+	}
+}
+
+func TestParseOptionsDefaultsToCSVOutput(t *testing.T) {
+	opts, err := parseOptions(nil, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if opts.output != "csv" {
+		t.Fatalf("expected csv output by default, got %q", opts.output)
+	}
+}
+
+func TestWriteCSVOutputsDefaultColumns(t *testing.T) {
+	result := scanResult{
+		Items: []applicationFinding{
+			{
+				Namespace:       "prod",
+				OwnerKind:       "ReplicaSet",
+				OwnerName:       "api-775d7f5b7d",
+				ServiceAccounts: []string{"api", "builder"},
+			},
+		},
+	}
+	var output bytes.Buffer
+
+	if err := writeResult(&output, result, options{output: "csv"}); err != nil {
+		t.Fatalf("writeResult returned error: %v", err)
+	}
+
+	want := "namespace,ownerKind,ownerName,serviceAccounts\nprod,ReplicaSet,api-775d7f5b7d,\"api,builder\"\n"
+	if output.String() != want {
+		t.Fatalf("unexpected csv output:\nwant %q\ngot  %q", want, output.String())
+	}
+}
+
+func TestWriteCSVOutputsHeaderOnlyWhenNoFindings(t *testing.T) {
+	var output bytes.Buffer
+
+	if err := writeResult(&output, scanResult{}, options{output: "csv"}); err != nil {
+		t.Fatalf("writeResult returned error: %v", err)
+	}
+
+	if got := output.String(); got != "namespace,ownerKind,ownerName,serviceAccounts\n" {
+		t.Fatalf("unexpected csv output %q", got)
 	}
 }
 
@@ -146,7 +191,7 @@ func TestCollectPodConfigReferencesReportsVolumeEnvAndEnvFrom(t *testing.T) {
 	}
 }
 
-func TestScanClusterGroupsDuplicatePodsByDeploymentOwner(t *testing.T) {
+func TestScanClusterGroupsDuplicatePodsByPodOwnerReference(t *testing.T) {
 	controller := true
 	objects := []runtime.Object{
 		&corev1.ConfigMap{
@@ -155,17 +200,8 @@ func TestScanClusterGroupsDuplicatePodsByDeploymentOwner(t *testing.T) {
 				"admin.conf": sampleKubeconfig,
 			},
 		},
-		&appsv1.ReplicaSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "api-775d7f5b7d",
-				Namespace: "prod",
-				OwnerReferences: []metav1.OwnerReference{
-					{Kind: "Deployment", Name: "api", Controller: &controller},
-				},
-			},
-		},
-		podWithConfigMapVolume("api-775d7f5b7d-a", "prod", "api-775d7f5b7d", controller),
-		podWithConfigMapVolume("api-775d7f5b7d-b", "prod", "api-775d7f5b7d", controller),
+		podWithConfigMapVolume("api-775d7f5b7d-a", "prod", "api-775d7f5b7d", "api", controller),
+		podWithConfigMapVolume("api-775d7f5b7d-b", "prod", "api-775d7f5b7d", "builder", controller),
 	}
 	client := fake.NewSimpleClientset(objects...)
 
@@ -178,14 +214,72 @@ func TestScanClusterGroupsDuplicatePodsByDeploymentOwner(t *testing.T) {
 		t.Fatalf("expected one application, got %#v", result.Items)
 	}
 	item := result.Items[0]
-	if item.OwnerKind != "Deployment" || item.OwnerName != "api" {
-		t.Fatalf("expected Deployment/api, got %#v", item)
+	if item.OwnerKind != "ReplicaSet" || item.OwnerName != "api-775d7f5b7d" {
+		t.Fatalf("expected ReplicaSet/api-775d7f5b7d, got %#v", item)
 	}
 	if item.PodCount != 2 {
 		t.Fatalf("expected two pods, got %d", item.PodCount)
 	}
 	if len(item.ConfigResources) != 1 {
 		t.Fatalf("expected one config resource, got %#v", item.ConfigResources)
+	}
+	if got := strings.Join(item.ServiceAccounts, ","); got != "api,builder" {
+		t.Fatalf("expected service accounts api,builder, got %q", got)
+	}
+}
+
+func TestScanClusterReportsDefaultServiceAccount(t *testing.T) {
+	controller := true
+	client := fake.NewSimpleClientset(
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "kubeconfigs", Namespace: "prod"},
+			Data: map[string]string{
+				"admin.conf": sampleKubeconfig,
+			},
+		},
+		podWithConfigMapVolume("api-775d7f5b7d-a", "prod", "api-775d7f5b7d", "", controller),
+	)
+
+	result, err := scanCluster(context.Background(), client, options{namespace: "prod", maxSamples: 5})
+	if err != nil {
+		t.Fatalf("scanCluster returned error: %v", err)
+	}
+
+	if len(result.Items) != 1 {
+		t.Fatalf("expected one application, got %#v", result.Items)
+	}
+	if got := strings.Join(result.Items[0].ServiceAccounts, ","); got != defaultServiceAccount {
+		t.Fatalf("expected default service account, got %q", got)
+	}
+}
+
+func TestResolvePodOwnerUsesFirstOwnerReferenceWhenControllerMissing(t *testing.T) {
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "custom-owned-pod",
+			Namespace: "prod",
+			OwnerReferences: []metav1.OwnerReference{
+				{Kind: "Widget", Name: "custom-owner"},
+			},
+		},
+	}
+
+	owner := resolvePodOwner(pod)
+
+	if owner.Kind != "Widget" || owner.Name != "custom-owner" || owner.Namespace != "prod" {
+		t.Fatalf("expected prod Widget/custom-owner, got %#v", owner)
+	}
+}
+
+func TestResolvePodOwnerFallsBackToPod(t *testing.T) {
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "standalone", Namespace: "prod"},
+	}
+
+	owner := resolvePodOwner(pod)
+
+	if owner.Kind != "Pod" || owner.Name != "standalone" || owner.Namespace != "prod" {
+		t.Fatalf("expected prod Pod/standalone, got %#v", owner)
 	}
 }
 
@@ -238,7 +332,7 @@ func assertKubeconfigKey(t *testing.T, keys []kubeconfigKeyFinding, key, encodin
 	t.Fatalf("expected kubeconfig key %s:%s in %#v", key, encoding, keys)
 }
 
-func podWithConfigMapVolume(name, namespace, replicaSet string, controller bool) *corev1.Pod {
+func podWithConfigMapVolume(name, namespace, replicaSet, serviceAccount string, controller bool) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -248,6 +342,7 @@ func podWithConfigMapVolume(name, namespace, replicaSet string, controller bool)
 			},
 		},
 		Spec: corev1.PodSpec{
+			ServiceAccountName: serviceAccount,
 			Volumes: []corev1.Volume{
 				{
 					Name: "kubeconfig",

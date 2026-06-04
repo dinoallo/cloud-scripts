@@ -1,6 +1,6 @@
 # check-kubeconfig-in-config
 
-Scan Kubernetes ConfigMaps and Secrets for kubeconfig content, then report applications whose Pods reference those resources. An application is grouped by the Pod controller owner, with ReplicaSets promoted to Deployments and Jobs promoted to CronJobs.
+Scan Kubernetes ConfigMaps and Secrets for kubeconfig content, then report applications whose Pods reference those resources. An application is grouped by the Pod ownerReference. The scanner uses the controller ownerReference when present, falls back to the first ownerReference, and reports standalone Pods as `Pod/<name>`.
 
 The scanner treats a value as kubeconfig when it can be parsed by client-go as a kubeconfig and contains cluster and context entries. It checks:
 
@@ -45,21 +45,20 @@ Options:
 - `--kubeconfig` kubeconfig path; falls back to in-cluster config when unavailable
 - `--context` kubeconfig context to use
 - `--namespace` namespace to scan; empty means all namespaces
-- `--output` output format: `table` or `json`
+- `--output` output format: `csv`, `table`, or `json`
 - `--include-pods` include per-Pod details in JSON output
 - `--max-samples` maximum Pod names to show per application in table output
 - `--skip-secret-inspection` skip listing Secrets
 
 ## Output
 
-Table output lists applications that reference ConfigMaps or Secrets containing kubeconfig content:
+Default output is CSV with these columns:
 
 ```text
-NAMESPACE  OWNER           CONFIG_RESOURCES                       PODS  SAMPLE_PODS
-prod       Deployment/api  ConfigMap/kubeconfigs[admin.conf:plain] 2     api-0,api-1
+namespace,ownerKind,ownerName,serviceAccounts
 ```
 
-JSON output also includes `unreferencedResources` for ConfigMaps or Secrets that contain kubeconfig data but are not referenced by any Pod seen during the scan.
+Use `--output table` for a wider human-readable table with config resource and sample Pod details. JSON output also includes `unreferencedResources` for ConfigMaps or Secrets that contain kubeconfig data but are not referenced by any Pod seen during the scan.
 
 ## RBAC
 
@@ -73,12 +72,6 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods", "configmaps"]
-    verbs: ["list"]
-  - apiGroups: ["apps"]
-    resources: ["replicasets"]
-    verbs: ["list"]
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
     verbs: ["list"]
 ```
 
