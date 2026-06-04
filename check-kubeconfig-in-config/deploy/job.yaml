@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: check-kubeconfig-in-config
+  namespace: check-kubeconfig-in-config
+  labels:
+    app.kubernetes.io/name: check-kubeconfig-in-config
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: check-kubeconfig-in-config
+    spec:
+      serviceAccountName: check-kubeconfig-in-config
+      restartPolicy: Never
+      containers:
+        - name: scanner
+          image: ghcr.io/dinoallo/check-kubeconfig-in-config:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --output
+            - json
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault

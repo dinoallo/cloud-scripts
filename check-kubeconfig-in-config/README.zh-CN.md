@@ -23,6 +23,23 @@ go build -o check-kubeconfig-in-config .
 ./check-kubeconfig-in-config --context my-cluster --output json --include-pods
 ```
 
+## Kubernetes
+
+在集群内以一次性 Job 运行扫描器：
+
+```bash
+kubectl apply -k deploy
+kubectl logs -n check-kubeconfig-in-config job/check-kubeconfig-in-config
+```
+
+同一个部署目录也包含每天集群时间 02:00 运行的 CronJob：
+
+```bash
+kubectl get cronjob -n check-kubeconfig-in-config check-kubeconfig-in-config
+```
+
+镜像覆盖和 RBAC 说明见 [deploy/README.zh-CN.md](deploy/README.zh-CN.md)。
+
 选项：
 
 - `--kubeconfig` kubeconfig 路径；不可用时回退到 in-cluster config

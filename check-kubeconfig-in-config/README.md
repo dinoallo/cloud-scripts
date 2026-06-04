@@ -23,6 +23,23 @@ go build -o check-kubeconfig-in-config .
 ./check-kubeconfig-in-config --context my-cluster --output json --include-pods
 ```
 
+## Kubernetes
+
+Run the scanner in-cluster as a one-shot Job:
+
+```bash
+kubectl apply -k deploy
+kubectl logs -n check-kubeconfig-in-config job/check-kubeconfig-in-config
+```
+
+The same deployment directory also includes a CronJob that runs daily at 02:00 cluster time:
+
+```bash
+kubectl get cronjob -n check-kubeconfig-in-config check-kubeconfig-in-config
+```
+
+See [deploy/README.md](deploy/README.md) for image override and RBAC notes.
+
 Options:
 
 - `--kubeconfig` kubeconfig path; falls back to in-cluster config when unavailable

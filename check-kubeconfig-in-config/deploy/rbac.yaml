@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: check-kubeconfig-in-config
+  namespace: check-kubeconfig-in-config
+  labels:
+    app.kubernetes.io/name: check-kubeconfig-in-config
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: check-kubeconfig-in-config
+  labels:
+    app.kubernetes.io/name: check-kubeconfig-in-config
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "configmaps", "secrets"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["list"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: check-kubeconfig-in-config
+  labels:
+    app.kubernetes.io/name: check-kubeconfig-in-config
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: check-kubeconfig-in-config
+subjects:
+  - kind: ServiceAccount
+    name: check-kubeconfig-in-config
+    namespace: check-kubeconfig-in-config
