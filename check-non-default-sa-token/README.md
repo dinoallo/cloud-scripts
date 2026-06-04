@@ -1,6 +1,6 @@
 # check-non-default-sa-token
 
-Scan Kubernetes Pods and report applications whose Pods use a non-default ServiceAccount token. An application is grouped by the Pod controller owner, with ReplicaSets promoted to Deployments and Jobs promoted to CronJobs.
+Scan Kubernetes Pods and report applications whose Pods use a non-default ServiceAccount token. An application is grouped by the Pod ownerReference. The scanner uses the controller ownerReference when present, falls back to the first ownerReference, and reports standalone Pods as `Pod/<name>`.
 
 ## Build
 
@@ -53,12 +53,6 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods", "serviceaccounts"]
-    verbs: ["list"]
-  - apiGroups: ["apps"]
-    resources: ["replicasets"]
-    verbs: ["list"]
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
     verbs: ["list"]
 ```
 

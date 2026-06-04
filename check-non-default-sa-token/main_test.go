@@ -5,8 +5,6 @@ import (
 	"context"
 	"testing"
 
-	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -120,17 +118,8 @@ func TestDetectPodTokenUseReportsLegacyNonDefaultTokenSecret(t *testing.T) {
 	}
 }
 
-func TestOwnerResolverPromotesReplicaSetToDeployment(t *testing.T) {
+func TestResolvePodOwnerUsesControllerOwnerReference(t *testing.T) {
 	controller := true
-	replicaSet := appsv1.ReplicaSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "api-775d7f5b7d",
-			Namespace: "prod",
-			OwnerReferences: []metav1.OwnerReference{
-				{Kind: "Deployment", Name: "api", Controller: &controller},
-			},
-		},
-	}
 	pod := corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "api-775d7f5b7d-xd9m4",
@@ -140,50 +129,40 @@ func TestOwnerResolverPromotesReplicaSetToDeployment(t *testing.T) {
 			},
 		},
 	}
-	resolver := ownerResolver{
-		replicaSetOwners: map[types.NamespacedName]*metav1.OwnerReference{
-			namespacedName(replicaSet.Namespace, replicaSet.Name): controllerOwner(&replicaSet.ObjectMeta),
-		},
-		jobOwners: map[types.NamespacedName]*metav1.OwnerReference{},
-	}
 
-	owner := resolver.resolvePodOwner(pod)
+	owner := resolvePodOwner(pod)
 
-	if owner.Kind != "Deployment" || owner.Name != "api" || owner.Namespace != "prod" {
-		t.Fatalf("expected prod Deployment/api, got %#v", owner)
+	if owner.Kind != "ReplicaSet" || owner.Name != "api-775d7f5b7d" || owner.Namespace != "prod" {
+		t.Fatalf("expected prod ReplicaSet/api-775d7f5b7d, got %#v", owner)
 	}
 }
 
-func TestOwnerResolverPromotesJobToCronJob(t *testing.T) {
-	controller := true
-	job := batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "backup-28678000",
-			Namespace: "prod",
-			OwnerReferences: []metav1.OwnerReference{
-				{Kind: "CronJob", Name: "backup", Controller: &controller},
-			},
-		},
-	}
+func TestResolvePodOwnerUsesFirstOwnerReferenceWhenControllerMissing(t *testing.T) {
 	pod := corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "backup-28678000-k8j7p",
+			Name:      "custom-owned-pod",
 			Namespace: "prod",
 			OwnerReferences: []metav1.OwnerReference{
-				{Kind: "Job", Name: "backup-28678000", Controller: &controller},
+				{Kind: "Widget", Name: "custom-owner"},
 			},
 		},
 	}
-	resolver := ownerResolver{
-		replicaSetOwners: map[types.NamespacedName]*metav1.OwnerReference{},
-		jobOwners: map[types.NamespacedName]*metav1.OwnerReference{
-			namespacedName(job.Namespace, job.Name): controllerOwner(&job.ObjectMeta),
-		},
+
+	owner := resolvePodOwner(pod)
+
+	if owner.Kind != "Widget" || owner.Name != "custom-owner" || owner.Namespace != "prod" {
+		t.Fatalf("expected prod Widget/custom-owner, got %#v", owner)
+	}
+}
+
+func TestResolvePodOwnerFallsBackToPod(t *testing.T) {
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "standalone", Namespace: "prod"},
 	}
 
-	owner := resolver.resolvePodOwner(pod)
+	owner := resolvePodOwner(pod)
 
-	if owner.Kind != "CronJob" || owner.Name != "backup" || owner.Namespace != "prod" {
-		t.Fatalf("expected prod CronJob/backup, got %#v", owner)
+	if owner.Kind != "Pod" || owner.Name != "standalone" || owner.Namespace != "prod" {
+		t.Fatalf("expected prod Pod/standalone, got %#v", owner)
 	}
 }

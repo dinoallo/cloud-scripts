@@ -14,7 +14,6 @@ import (
 	"text/tabwriter"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -78,11 +77,6 @@ type podTokenFinding struct {
 	ServiceAccounts map[string]struct{}
 	TokenSources    map[string]struct{}
 	Warnings        []string
-}
-
-type ownerResolver struct {
-	replicaSetOwners map[types.NamespacedName]*metav1.OwnerReference
-	jobOwners        map[types.NamespacedName]*metav1.OwnerReference
 }
 
 func main() {
@@ -213,9 +207,6 @@ func scanCluster(ctx context.Context, client kubernetes.Interface, opts options)
 		}
 	}
 
-	resolver, ownerWarnings := loadOwnerResolver(ctx, client, opts.namespace)
-	result.Warnings = append(result.Warnings, ownerWarnings...)
-
 	apps := map[ownerKey]*appAccumulator{}
 	for _, pod := range pods.Items {
 		podFinding := detectPodTokenUse(pod, serviceAccounts, secretTokenServiceAccounts)
@@ -223,7 +214,7 @@ func scanCluster(ctx context.Context, client kubernetes.Interface, opts options)
 			continue
 		}
 
-		owner := resolver.resolvePodOwner(pod)
+		owner := resolvePodOwner(pod)
 		acc := apps[owner]
 		if acc == nil {
 			acc = &appAccumulator{
@@ -281,36 +272,6 @@ func loadServiceAccountTokenSecrets(ctx context.Context, client kubernetes.Inter
 		tokenSecrets[namespacedName(secret.Namespace, secret.Name)] = serviceAccount
 	}
 	return tokenSecrets, nil
-}
-
-func loadOwnerResolver(ctx context.Context, client kubernetes.Interface, namespace string) (ownerResolver, []string) {
-	resolver := ownerResolver{
-		replicaSetOwners: map[types.NamespacedName]*metav1.OwnerReference{},
-		jobOwners:        map[types.NamespacedName]*metav1.OwnerReference{},
-	}
-	var warnings []string
-
-	replicaSets, err := client.AppsV1().ReplicaSets(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("could not list ReplicaSets; Deployment-owned pods may be reported as ReplicaSets: %v", err))
-	} else {
-		for _, replicaSet := range replicaSets.Items {
-			resolver.replicaSetOwners[namespacedName(replicaSet.Namespace, replicaSet.Name)] = controllerOwner(&replicaSet.ObjectMeta)
-		}
-	}
-
-	jobs, err := client.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			warnings = append(warnings, fmt.Sprintf("could not list Jobs; CronJob-owned pods may be reported as Jobs: %v", err))
-		}
-	} else {
-		for _, job := range jobs.Items {
-			resolver.jobOwners[namespacedName(job.Namespace, job.Name)] = controllerOwner(&job.ObjectMeta)
-		}
-	}
-
-	return resolver, warnings
 }
 
 func detectPodTokenUse(pod corev1.Pod, serviceAccountAutomounts map[types.NamespacedName]*bool, secretTokenServiceAccounts map[types.NamespacedName]string) podTokenFinding {
@@ -396,32 +357,24 @@ func hasProjectedServiceAccountTokenVolume(pod corev1.Pod) bool {
 	return false
 }
 
-func (resolver ownerResolver) resolvePodOwner(pod corev1.Pod) ownerKey {
-	owner := controllerOwner(&pod.ObjectMeta)
+func resolvePodOwner(pod corev1.Pod) ownerKey {
+	owner := podOwner(&pod.ObjectMeta)
 	if owner == nil {
 		return ownerKey{Namespace: pod.Namespace, Kind: "Pod", Name: pod.Name}
 	}
-
-	switch owner.Kind {
-	case "ReplicaSet":
-		if parent := resolver.replicaSetOwners[namespacedName(pod.Namespace, owner.Name)]; parent != nil && parent.Kind == "Deployment" {
-			return ownerKey{Namespace: pod.Namespace, Kind: parent.Kind, Name: parent.Name}
-		}
-	case "Job":
-		if parent := resolver.jobOwners[namespacedName(pod.Namespace, owner.Name)]; parent != nil && parent.Kind == "CronJob" {
-			return ownerKey{Namespace: pod.Namespace, Kind: parent.Kind, Name: parent.Name}
-		}
-	}
-
 	return ownerKey{Namespace: pod.Namespace, Kind: owner.Kind, Name: owner.Name}
 }
 
-func controllerOwner(meta *metav1.ObjectMeta) *metav1.OwnerReference {
+func podOwner(meta *metav1.ObjectMeta) *metav1.OwnerReference {
 	ref := metav1.GetControllerOf(meta)
-	if ref == nil {
+	if ref != nil {
+		copied := *ref
+		return &copied
+	}
+	if len(meta.OwnerReferences) == 0 {
 		return nil
 	}
-	copied := *ref
+	copied := meta.OwnerReferences[0]
 	return &copied
 }
 
