@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -22,6 +23,58 @@ func TestRunPrintsHelpWithoutError(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("expected no stderr, got %q", stderr.String())
+	}
+}
+
+func TestParseOptionsDefaultsToCSVOutput(t *testing.T) {
+	opts, err := parseOptions(nil, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("parseOptions returned error: %v", err)
+	}
+	if opts.output != "csv" {
+		t.Fatalf("expected csv output by default, got %q", opts.output)
+	}
+}
+
+func TestWriteCSVOutputsDefaultColumns(t *testing.T) {
+	result := scanResult{
+		Items: []applicationFinding{
+			{
+				Namespace:       "prod",
+				OwnerKind:       "ReplicaSet",
+				OwnerName:       "api-775d7f5b7d",
+				ServiceAccounts: []string{"api", "builder"},
+			},
+		},
+	}
+	var output bytes.Buffer
+
+	if err := writeResult(&output, result, options{output: "csv"}); err != nil {
+		t.Fatalf("writeResult returned error: %v", err)
+	}
+
+	want := "namespace,ownerKind,ownerName,serviceAccounts\nprod,ReplicaSet,api-775d7f5b7d,\"api,builder\"\n"
+	if output.String() != want {
+		t.Fatalf("unexpected csv output:\nwant %q\ngot  %q", want, output.String())
+	}
+}
+
+func TestWriteCSVOutputsHeaderOnlyWhenNoFindings(t *testing.T) {
+	var output bytes.Buffer
+
+	if err := writeResult(&output, scanResult{}, options{output: "csv"}); err != nil {
+		t.Fatalf("writeResult returned error: %v", err)
+	}
+
+	if got := output.String(); got != "namespace,ownerKind,ownerName,serviceAccounts\n" {
+		t.Fatalf("unexpected csv output %q", got)
+	}
+}
+
+func TestWriteResultRejectsUnsupportedOutput(t *testing.T) {
+	err := writeResult(&strings.Builder{}, scanResult{}, options{output: "yaml"})
+	if err == nil {
+		t.Fatalf("expected unsupported output error")
 	}
 }
 

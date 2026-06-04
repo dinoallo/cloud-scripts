@@ -16,6 +16,14 @@ go build -o check-non-default-sa-token .
 ./check-non-default-sa-token --context my-cluster --output json --include-pods
 ```
 
+Default output is CSV with these columns:
+
+```text
+namespace,ownerKind,ownerName,serviceAccounts
+```
+
+Use `--output table` for the wider human-readable table, or `--output json --include-pods` for detailed per-Pod findings.
+
 ## Kubernetes
 
 Run the scanner in-cluster as a one-shot Job:

@@ -25,9 +25,6 @@ spec:
             - name: scanner
               image: ghcr.io/dinoallo/check-non-default-sa-token:latest
               imagePullPolicy: IfNotPresent
-              args:
-                - --output
-                - json
               resources:
                 requests:
                   cpu: 20m

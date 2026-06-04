@@ -17,6 +17,12 @@ kubectl create job -n check-non-default-sa-token --from=cronjob/check-non-defaul
 kubectl logs -n check-non-default-sa-token job/check-non-default-sa-token-manual
 ```
 
+Job and CronJob logs use the scanner's default CSV output:
+
+```text
+namespace,ownerKind,ownerName,serviceAccounts
+```
+
 Delete the one-shot Job before rerunning it with the same name:
 
 ```bash

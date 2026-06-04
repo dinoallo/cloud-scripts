@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -131,7 +132,7 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 	fs.StringVar(&opts.kubeconfig, "kubeconfig", defaultKubeconfig, "path to kubeconfig; falls back to in-cluster config when unavailable")
 	fs.StringVar(&opts.contextName, "context", "", "kubeconfig context to use")
 	fs.StringVar(&opts.namespace, "namespace", metav1.NamespaceAll, "namespace to scan; empty means all namespaces")
-	fs.StringVar(&opts.output, "output", "table", "output format: table or json")
+	fs.StringVar(&opts.output, "output", "csv", "output format: csv, table, or json")
 	fs.IntVar(&opts.maxSamples, "max-samples", 5, "maximum pod names to show per application in table output")
 	fs.BoolVar(&opts.skipSecretInspect, "skip-secret-inspection", false, "skip listing Secrets for legacy service-account-token volume attribution")
 	fs.BoolVar(&opts.includePodBreakdown, "include-pods", false, "include per-pod details in JSON output")
@@ -142,8 +143,8 @@ func parseOptions(args []string, output io.Writer) (options, error) {
 	if fs.NArg() > 0 {
 		return opts, fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
 	}
-	if opts.output != "table" && opts.output != "json" {
-		return opts, fmt.Errorf("unsupported output %q; use table or json", opts.output)
+	if opts.output != "csv" && opts.output != "table" && opts.output != "json" {
+		return opts, fmt.Errorf("unsupported output %q; use csv, table, or json", opts.output)
 	}
 	if opts.maxSamples < 1 {
 		return opts, errors.New("--max-samples must be greater than zero")
@@ -414,6 +415,8 @@ func flattenApplications(apps map[ownerKey]*appAccumulator, opts options) []appl
 
 func writeResult(w io.Writer, result scanResult, opts options) error {
 	switch opts.output {
+	case "csv":
+		return writeCSV(w, result)
 	case "json":
 		encoder := json.NewEncoder(w)
 		encoder.SetIndent("", "  ")
@@ -423,6 +426,25 @@ func writeResult(w io.Writer, result scanResult, opts options) error {
 	default:
 		return fmt.Errorf("unsupported output %q", opts.output)
 	}
+}
+
+func writeCSV(w io.Writer, result scanResult) error {
+	writer := csv.NewWriter(w)
+	if err := writer.Write([]string{"namespace", "ownerKind", "ownerName", "serviceAccounts"}); err != nil {
+		return err
+	}
+	for _, item := range result.Items {
+		if err := writer.Write([]string{
+			item.Namespace,
+			item.OwnerKind,
+			item.OwnerName,
+			strings.Join(item.ServiceAccounts, ","),
+		}); err != nil {
+			return err
+		}
+	}
+	writer.Flush()
+	return writer.Error()
 }
 
 func writeTable(w io.Writer, result scanResult) error {
