@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: check-sa-token-ca-retirement
+  namespace: check-sa-token-ca-retirement
+  labels:
+    app.kubernetes.io/name: check-sa-token-ca-retirement
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: check-sa-token-ca-retirement
+        spec:
+          serviceAccountName: check-sa-token-ca-retirement
+          restartPolicy: Never
+          containers:
+            - name: scanner
+              image: ghcr.io/dinoallo/check-sa-token-ca-retirement:latest
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65532
+                seccompProfile:
+                  type: RuntimeDefault
