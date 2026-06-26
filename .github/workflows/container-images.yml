@@ -31,6 +31,10 @@ jobs:
             image: check-non-default-sa-token
           - app_dir: check-kubeconfig-in-config
             image: check-kubeconfig-in-config
+          - app_dir: check-sa-token-ca-retirement
+            image: check-sa-token-ca-retirement
+          - app_dir: check-apiserver-access-candidates
+            image: check-apiserver-access-candidates
     steps:
       - name: Checkout
         uses: actions/checkout@v4

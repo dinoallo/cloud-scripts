@@ -24,6 +24,8 @@ jobs:
           - scan-token
           - check-non-default-sa-token
           - check-kubeconfig-in-config
+          - check-sa-token-ca-retirement
+          - check-apiserver-access-candidates
     steps:
       - name: Checkout
         uses: actions/checkout@v4
