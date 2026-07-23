@@ -16,7 +16,7 @@ spec:
       serviceAccountName: template-pvc-scanner
       containers:
         - name: scanner
-          image: registry.example.com/template-pvc-scanner:latest
+          image: ghcr.io/dinoallo/template-pvc-scanner:latest
           imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
@@ -55,12 +55,23 @@ spec:
           volumeMounts:
             - name: scan-output
               mountPath: /scan-output
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
             capabilities:
               drop:
                 - ALL
+            seccompProfile:
+              type: RuntimeDefault
       volumes:
         - name: scan-output
           emptyDir: {}

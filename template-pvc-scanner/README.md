@@ -26,15 +26,15 @@ The `deploy/` directory contains a read-only Job setup that writes CSV output to
 
 Before applying it, edit `deploy/job.yaml`:
 
-- replace `registry.example.com/template-pvc-scanner:latest` with your scanner
-  image
 - set `TEMPLATE_INSTANCE`
 - adjust `SCANNER_ARGS` if you want `--namespace`, `--statefulset`, or
   `--claim-template`
+- replace `ghcr.io/dinoallo/template-pvc-scanner:latest` if you build and push
+  the image under a different registry or owner
 
-The image must include the scanner binary at `/template-pvc-scanner`, or set
-`SCANNER_BIN`. It also needs `/bin/sh` for the wrapper command and `tar` for
-`kubectl cp`.
+The default image is built from `template-pvc-scanner/Dockerfile` and includes
+the scanner binary at `/template-pvc-scanner`, `/bin/sh` for the wrapper
+command, and `tar` for `kubectl cp`.
 
 Apply the Job:
 

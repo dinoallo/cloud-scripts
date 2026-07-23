@@ -25,15 +25,15 @@ go build -o template-pvc-scanner .
 
 apply 之前先编辑 `deploy/job.yaml`：
 
-- 把 `registry.example.com/template-pvc-scanner:latest` 替换成你的 scanner
-  镜像
 - 设置 `TEMPLATE_INSTANCE`
 - 如需限制 namespace 或显式指定 StatefulSet / claim template，调整
   `SCANNER_ARGS`
+- 如果镜像发布在其他 registry 或 owner 下，把
+  `ghcr.io/dinoallo/template-pvc-scanner:latest` 替换成你的镜像
 
-镜像需要把 scanner 二进制放在 `/template-pvc-scanner`，或者通过 `SCANNER_BIN`
-指定路径。镜像里还需要 `/bin/sh` 执行 wrapper 命令，并且需要 `tar` 支持
-`kubectl cp`。
+默认镜像由 `template-pvc-scanner/Dockerfile` 构建，包含
+`/template-pvc-scanner` 二进制、用于执行 wrapper 命令的 `/bin/sh`，以及支持
+`kubectl cp` 的 `tar`。
 
 应用 Job：
 
