@@ -260,21 +260,12 @@ func TestWriteOutputCSV(t *testing.T) {
 	assertField(t, row, "pvc", "data-mysql-0")
 	assertField(t, row, "pv", "pv-data-mysql-0")
 	assertField(t, row, "ownerStatus", ownerNotFound)
-	assertField(t, row, "ownerAPIVersion", "apps/v1")
-	assertField(t, row, "ownerKind", "StatefulSet")
-	assertField(t, row, "ownerNamespace", "prod")
-	assertField(t, row, "ownerName", "mysql")
-	assertField(t, row, "ownerUID", "owner-uid")
-	assertField(t, row, "ownerController", "true")
-	assertField(t, row, "ownerBlockOwnerDeletion", "false")
-	assertField(t, row, "ownerRefCount", "1")
+	assertField(t, row, "reason", "owner object was not found in the PVC namespace")
 	assertField(t, row, "pvcPhase", "Bound")
 	assertField(t, row, "pvPhase", "Bound")
 	assertField(t, row, "pvReclaimPolicy", "Retain")
 	assertField(t, row, "pvClaimRefMatched", "true")
 	assertField(t, row, "pvcStorageClass", "fast")
-	assertField(t, row, "pvcSize", "10Gi")
-	assertField(t, row, "pvcAge", "2d1h")
 }
 
 func TestWriteOutputJSONL(t *testing.T) {

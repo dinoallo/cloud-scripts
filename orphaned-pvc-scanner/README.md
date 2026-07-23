@@ -73,15 +73,18 @@ This filter applies in both default and `--resolve-owners` modes.
 
 ## Output
 
-Structured output uses these fields:
+CSV and table output use these review-focused fields:
 
 ```text
-namespace,pvc,pv,ownerStatus,ownerAPIVersion,ownerKind,ownerNamespace,ownerName,ownerUID,ownerController,ownerBlockOwnerDeletion,ownerRefCount,reason,pvcPhase,pvPhase,pvReclaimPolicy,pvClaimRefMatched,pvcStorageClass,pvcSize,pvcAge
+namespace,pvc,pv,ownerStatus,reason,pvcPhase,pvPhase,pvReclaimPolicy,pvClaimRefMatched,pvcStorageClass
 ```
 
 The PV fields are populated when the PVC has `spec.volumeName` and the bound PV
 can be read. `pvClaimRefMatched` shows whether the PV still points back to the
 candidate PVC.
+
+JSON Lines output keeps the full row object, including ownerReference details,
+PVC size, and PVC age, for follow-up automation.
 
 ## Safety Notes
 
