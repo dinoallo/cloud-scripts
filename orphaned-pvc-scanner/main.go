@@ -210,12 +210,19 @@ func collectTargets(ctx context.Context, client kubernetes.Interface, resolver o
 	if err != nil {
 		return nil, err
 	}
+	usedPVCs, err := collectUsedPVCs(ctx, client, opts.namespace)
+	if err != nil {
+		return nil, fmt.Errorf("list pods to identify in-use PVCs: %w", err)
+	}
 
 	targets := make([]targetPVC, 0)
 	for i := range pvcs.Items {
 		pvc := &pvcs.Items[i]
 		owner, orphan := classifyPVC(ctx, pvc, resolver)
 		if !orphan {
+			continue
+		}
+		if owner.status == ownerNoReferences && usedPVCs.Has(pvc.Namespace, pvc.Name) {
 			continue
 		}
 
@@ -238,6 +245,42 @@ func collectTargets(ctx context.Context, client kubernetes.Interface, resolver o
 	}
 
 	return targets, nil
+}
+
+type pvcUsageIndex map[types.NamespacedName]struct{}
+
+func collectUsedPVCs(ctx context.Context, client kubernetes.Interface, namespace string) (pvcUsageIndex, error) {
+	pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	used := pvcUsageIndex{}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if isTerminalPod(pod) {
+			continue
+		}
+		for _, volume := range pod.Spec.Volumes {
+			if volume.PersistentVolumeClaim == nil || volume.PersistentVolumeClaim.ClaimName == "" {
+				continue
+			}
+			used[types.NamespacedName{
+				Namespace: pod.Namespace,
+				Name:      volume.PersistentVolumeClaim.ClaimName,
+			}] = struct{}{}
+		}
+	}
+	return used, nil
+}
+
+func (i pvcUsageIndex) Has(namespace, name string) bool {
+	_, ok := i[types.NamespacedName{Namespace: namespace, Name: name}]
+	return ok
+}
+
+func isTerminalPod(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
 }
 
 func classifyPVC(ctx context.Context, pvc *corev1.PersistentVolumeClaim, resolver ownerResolver) (ownerCheck, bool) {

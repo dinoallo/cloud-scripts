@@ -5,7 +5,8 @@
 
 它比 `template-pvc-scanner` 扫描范围更宽：不需要 template instance、
 StatefulSet 名称或 claim template。只要 PVC 没有 ownerReferences，或者
-ownerReferences 不能解析到 UID 匹配的现存 owner 对象，就会被报告。
+ownerReferences 不能解析到 UID 匹配的现存 owner 对象，就会被报告；但没有
+ownerReferences 且仍被当前活跃 Pod 引用的 PVC 会被跳过。
 
 ## 构建
 
@@ -37,7 +38,7 @@ go build -o orphaned-pvc-scanner .
 
 scanner 每个 PVC 候选对象输出一行。`ownerStatus` 包括：
 
-- `noOwnerReferences`：PVC 没有 ownerReferences。
+- `noOwnerReferences`：PVC 没有 ownerReferences，且没有被任何非终态 Pod 引用。
 - `ownerNotFound`：引用的 owner 对象不存在。
 - `ownerUIDMismatch`：同名 owner 对象存在，但 UID 和 ownerReference 里的 UID
   不一致。
@@ -49,6 +50,11 @@ scanner 每个 PVC 候选对象输出一行。`ownerStatus` 包括：
   这表示未知状态，不应作为删除信号。
 
 如果任意一个 ownerReference 能解析到 UID 匹配的现存 owner 对象，这个 PVC 就不会
+被报告。
+
+对于没有 ownerReferences 的 PVC，scanner 会在扫描范围内列出 Pod，并跳过被
+非 `Succeeded` / `Failed` 状态 Pod 引用的 PVC。这个过滤只作用于
+`noOwnerReferences`；如果 PVC 有断裂的 ownerReferences，即使被 Pod 引用仍然会
 被报告。
 
 ## 输出
@@ -67,6 +73,7 @@ namespace,pvc,pv,ownerStatus,ownerAPIVersion,ownerKind,ownerNamespace,ownerName,
 `noOwnerReferences` 是低置信度信号。很多正常 PVC 本来就不会设置
 ownerReferences，例如手工创建的 PVC，或者由某些部署工具管理但没有设置
 ownerReferences 的 PVC。
+为了减少噪音，scanner 不会报告仍被活跃 Pod 引用的无 ownerReferences PVC。
 
 `ownerNotFound`、`ownerUIDMismatch`、`ownerGVKNotFound` 和
 `ownerInvalidScope` 是更强的 orphan 信号，但删除前仍然应该结合业务和 workload

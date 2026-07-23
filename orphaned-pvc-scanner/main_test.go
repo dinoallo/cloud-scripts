@@ -171,6 +171,63 @@ func TestCollectTargets(t *testing.T) {
 	}
 }
 
+func TestCollectTargetsSkipsNoOwnerPVCUsedByActivePod(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewSimpleClientset(
+		pvc("data", "prod", nil),
+		podUsingPVC("app-0", "prod", "data", corev1.PodRunning),
+	)
+
+	targets, err := collectTargets(context.Background(), client, staticOwnerResolver{}, options{namespace: "prod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 0 {
+		t.Fatalf("expected active pod usage to skip no-owner PVC, got %#v", targets)
+	}
+}
+
+func TestCollectTargetsReportsNoOwnerPVCOnlyUsedByTerminalPod(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewSimpleClientset(
+		pvc("data", "prod", nil),
+		podUsingPVC("completed", "prod", "data", corev1.PodSucceeded),
+	)
+
+	targets, err := collectTargets(context.Background(), client, staticOwnerResolver{}, options{namespace: "prod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("expected terminal pod usage not to hide no-owner PVC, got %#v", targets)
+	}
+	if targets[0].name != "data" {
+		t.Fatalf("expected data target, got %s", targets[0].name)
+	}
+}
+
+func TestCollectTargetsDoesNotSkipBrokenOwnerPVCUsedByActivePod(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewSimpleClientset(
+		pvc("data", "prod", []metav1.OwnerReference{ownerRef("missing-owner", "missing-uid")}),
+		podUsingPVC("app-0", "prod", "data", corev1.PodRunning),
+	)
+
+	targets, err := collectTargets(context.Background(), client, staticOwnerResolver{}, options{namespace: "prod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("expected broken owner PVC to still be reported, got %#v", targets)
+	}
+	if targets[0].owner.status != ownerNotFound {
+		t.Fatalf("expected status %s, got %s", ownerNotFound, targets[0].owner.status)
+	}
+}
+
 func TestWriteOutputCSV(t *testing.T) {
 	t.Parallel()
 
@@ -262,6 +319,30 @@ func ownerRef(name, uid string) metav1.OwnerReference {
 		Name:       name,
 		UID:        types.UID(uid),
 		Controller: &controller,
+	}
+}
+
+func podUsingPVC(name, namespace, claimName string, phase corev1.PodPhase) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: corev1.PodSpec{
+			Volumes: []corev1.Volume{
+				{
+					Name: "data",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: claimName,
+						},
+					},
+				},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: phase,
+		},
 	}
 }
 

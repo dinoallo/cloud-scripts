@@ -5,8 +5,9 @@ verified. This tool is read-only. It does not delete PVCs or PVs.
 
 This scanner is broader than `template-pvc-scanner`: it does not require a
 template instance, StatefulSet name, or claim template. It reports PVCs with no
-ownerReferences and PVCs whose ownerReferences do not resolve to an existing
-owner object with the referenced UID.
+ownerReferences, unless they are referenced by a currently active Pod, and PVCs
+whose ownerReferences do not resolve to an existing owner object with the
+referenced UID.
 
 ## Build
 
@@ -38,7 +39,8 @@ Use JSON Lines for follow-up automation:
 
 The scanner reports one row per PVC candidate. `ownerStatus` is one of:
 
-- `noOwnerReferences`: the PVC has no ownerReferences.
+- `noOwnerReferences`: the PVC has no ownerReferences and is not referenced by
+  any non-terminal Pod.
 - `ownerNotFound`: the referenced owner object was not found.
 - `ownerUIDMismatch`: an object with the referenced name exists, but its UID
   does not match the ownerReference UID.
@@ -53,6 +55,11 @@ The scanner reports one row per PVC candidate. `ownerStatus` is one of:
 
 If any ownerReference resolves to an existing owner object with the matching
 UID, the PVC is not reported.
+
+For PVCs with no ownerReferences, the scanner lists Pods in the scan scope and
+skips PVCs referenced by Pods that are not in `Succeeded` or `Failed` phase.
+This filter only applies to `noOwnerReferences`; PVCs with broken ownerReferences
+are still reported even if a Pod references them.
 
 ## Output
 
@@ -71,6 +78,8 @@ candidate PVC.
 `noOwnerReferences` is a low-confidence signal. Many valid PVCs are intentionally
 created without ownerReferences, including manually created PVCs and PVCs
 managed by deployment tools that do not set ownerReferences.
+To reduce noise, the scanner does not report no-owner PVCs that are still
+referenced by active Pods.
 
 `ownerNotFound`, `ownerUIDMismatch`, `ownerGVKNotFound`, and `ownerInvalidScope`
 are stronger orphan signals, but they should still be reviewed with workload
