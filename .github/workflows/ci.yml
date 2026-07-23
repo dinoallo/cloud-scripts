@@ -26,6 +26,7 @@ jobs:
           - check-kubeconfig-in-config
           - check-sa-token-ca-retirement
           - check-apiserver-access-candidates
+          - orphaned-pvc-scanner
     steps:
       - name: Checkout
         uses: actions/checkout@v4

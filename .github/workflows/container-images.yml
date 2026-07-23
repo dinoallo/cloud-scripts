@@ -20,6 +20,7 @@ on:
           - check-sa-token-ca-retirement
           - check-apiserver-access-candidates
           - template-pvc-scanner
+          - orphaned-pvc-scanner
 
 concurrency:
   group: container-images-${{ github.ref }}
@@ -57,7 +58,8 @@ jobs:
             {"app_dir":"check-kubeconfig-in-config","image":"check-kubeconfig-in-config","dockerfile":"./Dockerfile"},
             {"app_dir":"check-sa-token-ca-retirement","image":"check-sa-token-ca-retirement","dockerfile":"./Dockerfile"},
             {"app_dir":"check-apiserver-access-candidates","image":"check-apiserver-access-candidates","dockerfile":"./Dockerfile"},
-            {"app_dir":"template-pvc-scanner","image":"template-pvc-scanner","dockerfile":"./template-pvc-scanner/Dockerfile"}
+            {"app_dir":"template-pvc-scanner","image":"template-pvc-scanner","dockerfile":"./template-pvc-scanner/Dockerfile"},
+            {"app_dir":"orphaned-pvc-scanner","image":"orphaned-pvc-scanner","dockerfile":"./Dockerfile"}
           ]'
 
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then

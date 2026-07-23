@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: orphaned-pvc-scanner
+  namespace: orphaned-pvc-scanner
+  labels:
+    app.kubernetes.io/name: orphaned-pvc-scanner
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: orphaned-pvc-scanner
+    spec:
+      restartPolicy: Never
+      serviceAccountName: orphaned-pvc-scanner
+      containers:
+        - name: scanner
+          image: ghcr.io/dinoallo/orphaned-pvc-scanner:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --output
+            - csv
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
