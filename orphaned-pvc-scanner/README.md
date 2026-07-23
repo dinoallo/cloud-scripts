@@ -1,13 +1,13 @@
 # orphaned-pvc-scanner
 
-Scan Kubernetes PVCs whose owner relationship is missing, broken, or cannot be
-verified. This tool is read-only. It does not delete PVCs or PVs.
+Scan Kubernetes PVCs that have no ownerReferences and are not currently used by
+active Pods. This tool is read-only. It does not delete PVCs or PVs.
 
 This scanner is broader than `template-pvc-scanner`: it does not require a
-template instance, StatefulSet name, or claim template. It reports PVCs with no
-ownerReferences, unless they are referenced by a currently active Pod, and PVCs
-whose ownerReferences do not resolve to an existing owner object with the
-referenced UID.
+template instance, StatefulSet name, or claim template. By default, it only uses
+PVC metadata, bound PV metadata, and Pod volume references. It does not resolve
+ownerReferences or query arbitrary owner resource types unless `--resolve-owners`
+is explicitly set.
 
 ## Build
 
@@ -35,12 +35,22 @@ Use JSON Lines for follow-up automation:
 ./orphaned-pvc-scanner --output jsonl > orphaned-pvcs.jsonl
 ```
 
+Enable deep ownerReference resolution when the scanner has read permissions for
+the relevant owner resource types:
+
+```bash
+./orphaned-pvc-scanner --resolve-owners --output csv > orphaned-pvcs.csv
+```
+
 ## Owner Status
 
-The scanner reports one row per PVC candidate. `ownerStatus` is one of:
+The scanner reports one row per PVC candidate. By default, `ownerStatus` can be:
 
 - `noOwnerReferences`: the PVC has no ownerReferences and is not referenced by
   any non-terminal Pod.
+
+When `--resolve-owners` is set, these additional statuses can also be reported:
+
 - `ownerNotFound`: the referenced owner object was not found.
 - `ownerUIDMismatch`: an object with the referenced name exists, but its UID
   does not match the ownerReference UID.
@@ -54,12 +64,12 @@ The scanner reports one row per PVC candidate. `ownerStatus` is one of:
   deletion signal.
 
 If any ownerReference resolves to an existing owner object with the matching
-UID, the PVC is not reported.
+UID, the PVC is not reported. Without `--resolve-owners`, PVCs that have
+ownerReferences are skipped without querying their owners.
 
 For PVCs with no ownerReferences, the scanner lists Pods in the scan scope and
 skips PVCs referenced by Pods that are not in `Succeeded` or `Failed` phase.
-This filter only applies to `noOwnerReferences`; PVCs with broken ownerReferences
-are still reported even if a Pod references them.
+This filter applies in both default and `--resolve-owners` modes.
 
 ## Output
 
@@ -82,8 +92,8 @@ To reduce noise, the scanner does not report no-owner PVCs that are still
 referenced by active Pods.
 
 `ownerNotFound`, `ownerUIDMismatch`, `ownerGVKNotFound`, and `ownerInvalidScope`
-are stronger orphan signals, but they should still be reviewed with workload
-context before deletion.
+are stronger orphan signals available only with `--resolve-owners`, but they
+should still be reviewed with workload context before deletion.
 
 ## Kubernetes Job
 
@@ -100,15 +110,17 @@ The Job writes CSV to stdout. Redirect logs locally when you want a review file:
 kubectl logs -n orphaned-pvc-scanner job/orphaned-pvc-scanner > orphaned-pvcs.csv
 ```
 
-The default RBAC is read-only. It can verify common workload owners such as
-Pods, ReplicationControllers, Deployments, ReplicaSets, StatefulSets,
-DaemonSets, Jobs, and CronJobs. If PVCs are owned by CRDs or other resource
-types, grant this ServiceAccount additional read-only `get`/`list` permissions
-for those owner resources; otherwise those PVCs may be reported as
-`ownerLookupError`.
+The default RBAC is read-only and intentionally minimal. It can list PVCs, get
+bound PVs, and list Pods to avoid reporting no-owner PVCs that are still in use.
+It does not grant discovery or owner resource permissions. If you enable
+`--resolve-owners`, grant this ServiceAccount additional read-only discovery and
+owner resource `get`/`list` permissions for the resource types you want to
+verify.
 
 ## Options
 
 - `--kubeconfig` kubeconfig path; falls back to in-cluster config when available
 - `--namespace` namespace to scan; empty means all namespaces
 - `--output` output format: `table`, `csv`, or `jsonl`; default is `table`
+- `--resolve-owners` resolve ownerReferences by querying owner objects; default
+  is disabled

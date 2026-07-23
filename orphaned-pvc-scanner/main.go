@@ -72,9 +72,10 @@ var outputHeaders = []string{
 }
 
 type options struct {
-	kubeconfig string
-	namespace  string
-	output     string
+	kubeconfig    string
+	namespace     string
+	output        string
+	resolveOwners bool
 }
 
 type clients struct {
@@ -175,6 +176,7 @@ func parseFlags() options {
 	flag.StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig")
 	flag.StringVar(&opts.namespace, "namespace", "", "namespace to scan; empty scans all namespaces")
 	flag.StringVar(&opts.output, "output", outputTable, "output format: table, csv, or jsonl")
+	flag.BoolVar(&opts.resolveOwners, "resolve-owners", false, "resolve ownerReferences by querying owner objects; requires additional RBAC")
 	flag.Parse()
 	return opts
 }
@@ -189,11 +191,14 @@ func run(ctx context.Context, opts options) error {
 		return err
 	}
 
-	resolver := &dynamicOwnerResolver{
-		client:      clients.dynamic,
-		mapper:      clients.mapper,
-		lookupCache: map[ownerLookupKey]ownerLookupResult{},
-		scopeCache:  map[crossNamespaceKey]crossNamespaceResult{},
+	var resolver ownerResolver
+	if opts.resolveOwners {
+		resolver = &dynamicOwnerResolver{
+			client:      clients.dynamic,
+			mapper:      clients.mapper,
+			lookupCache: map[ownerLookupKey]ownerLookupResult{},
+			scopeCache:  map[crossNamespaceKey]crossNamespaceResult{},
+		}
 	}
 
 	targets, err := collectTargets(ctx, clients.kubernetes, resolver, opts)
@@ -218,7 +223,7 @@ func collectTargets(ctx context.Context, client kubernetes.Interface, resolver o
 	targets := make([]targetPVC, 0)
 	for i := range pvcs.Items {
 		pvc := &pvcs.Items[i]
-		owner, orphan := classifyPVC(ctx, pvc, resolver)
+		owner, orphan := classifyPVC(ctx, pvc, resolver, opts.resolveOwners)
 		if !orphan {
 			continue
 		}
@@ -283,11 +288,20 @@ func isTerminalPod(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
 }
 
-func classifyPVC(ctx context.Context, pvc *corev1.PersistentVolumeClaim, resolver ownerResolver) (ownerCheck, bool) {
+func classifyPVC(ctx context.Context, pvc *corev1.PersistentVolumeClaim, resolver ownerResolver, resolveOwners bool) (ownerCheck, bool) {
 	if len(pvc.OwnerReferences) == 0 {
 		return ownerCheck{
 			status: ownerNoReferences,
 			reason: "PVC has no ownerReferences",
+		}, true
+	}
+	if !resolveOwners {
+		return ownerCheck{}, false
+	}
+	if resolver == nil {
+		return ownerCheck{
+			status: ownerLookupError,
+			reason: "owner lookup requested but resolver is not configured",
 		}, true
 	}
 

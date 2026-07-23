@@ -38,12 +38,22 @@ func (r staticOwnerResolver) ResolveOwner(_ context.Context, pvc *corev1.Persist
 func TestClassifyPVCWithoutOwnerReferences(t *testing.T) {
 	t.Parallel()
 
-	owner, orphan := classifyPVC(context.Background(), pvc("data", "prod", nil), staticOwnerResolver{})
+	owner, orphan := classifyPVC(context.Background(), pvc("data", "prod", nil), staticOwnerResolver{}, false)
 	if !orphan {
 		t.Fatal("expected PVC without ownerReferences to be classified as orphan")
 	}
 	if owner.status != ownerNoReferences {
 		t.Fatalf("expected status %s, got %s", ownerNoReferences, owner.status)
+	}
+}
+
+func TestClassifyPVCSkipsOwnerReferencesWhenOwnerLookupDisabled(t *testing.T) {
+	t.Parallel()
+
+	pvc := pvc("data", "prod", []metav1.OwnerReference{ownerRef("missing-owner", "missing-uid")})
+	_, orphan := classifyPVC(context.Background(), pvc, staticOwnerResolver{}, false)
+	if orphan {
+		t.Fatal("expected PVC with ownerReferences to be skipped when owner lookup is disabled")
 	}
 }
 
@@ -63,7 +73,7 @@ func TestClassifyPVCSkipsWhenAnyOwnerExists(t *testing.T) {
 			status: ownerFound,
 			reason: "owner exists",
 		},
-	})
+	}, true)
 	if orphan {
 		t.Fatal("expected PVC to be skipped when at least one owner exists")
 	}
@@ -85,7 +95,7 @@ func TestClassifyPVCSelectsLookupErrorBeforeMissingOwner(t *testing.T) {
 			status: ownerLookupError,
 			reason: "forbidden",
 		},
-	})
+	}, true)
 	if !orphan {
 		t.Fatal("expected unresolved PVC to be reported")
 	}
@@ -216,7 +226,7 @@ func TestCollectTargetsDoesNotSkipBrokenOwnerPVCUsedByActivePod(t *testing.T) {
 		podUsingPVC("app-0", "prod", "data", corev1.PodRunning),
 	)
 
-	targets, err := collectTargets(context.Background(), client, staticOwnerResolver{}, options{namespace: "prod"})
+	targets, err := collectTargets(context.Background(), client, staticOwnerResolver{}, options{namespace: "prod", resolveOwners: true})
 	if err != nil {
 		t.Fatal(err)
 	}

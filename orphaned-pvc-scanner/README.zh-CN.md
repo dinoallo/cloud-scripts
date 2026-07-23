@@ -1,12 +1,12 @@
 # orphaned-pvc-scanner
 
-扫描 Kubernetes 中 owner 关系缺失、断裂或无法确认的 PVC。这个工具是只读的，不会
-删除 PVC 或 PV。
+扫描 Kubernetes 中没有 ownerReferences、且当前没有被活跃 Pod 使用的 PVC。这个
+工具是只读的，不会删除 PVC 或 PV。
 
 它比 `template-pvc-scanner` 扫描范围更宽：不需要 template instance、
-StatefulSet 名称或 claim template。只要 PVC 没有 ownerReferences，或者
-ownerReferences 不能解析到 UID 匹配的现存 owner 对象，就会被报告；但没有
-ownerReferences 且仍被当前活跃 Pod 引用的 PVC 会被跳过。
+StatefulSet 名称或 claim template。默认情况下，它只使用 PVC metadata、绑定 PV
+metadata 和 Pod volume 引用，不会解析 ownerReferences，也不会查询任意 owner
+资源类型；只有显式设置 `--resolve-owners` 时才会做深度 owner 查询。
 
 ## 构建
 
@@ -34,11 +34,21 @@ go build -o orphaned-pvc-scanner .
 ./orphaned-pvc-scanner --output jsonl > orphaned-pvcs.jsonl
 ```
 
+当 scanner 对相关 owner 资源类型有读取权限时，可以显式打开深度 ownerReference
+解析：
+
+```bash
+./orphaned-pvc-scanner --resolve-owners --output csv > orphaned-pvcs.csv
+```
+
 ## Owner 状态
 
-scanner 每个 PVC 候选对象输出一行。`ownerStatus` 包括：
+scanner 每个 PVC 候选对象输出一行。默认情况下，`ownerStatus` 只会是：
 
 - `noOwnerReferences`：PVC 没有 ownerReferences，且没有被任何非终态 Pod 引用。
+
+设置 `--resolve-owners` 后，才可能额外输出这些状态：
+
 - `ownerNotFound`：引用的 owner 对象不存在。
 - `ownerUIDMismatch`：同名 owner 对象存在，但 UID 和 ownerReference 里的 UID
   不一致。
@@ -50,12 +60,12 @@ scanner 每个 PVC 候选对象输出一行。`ownerStatus` 包括：
   这表示未知状态，不应作为删除信号。
 
 如果任意一个 ownerReference 能解析到 UID 匹配的现存 owner 对象，这个 PVC 就不会
-被报告。
+被报告。未设置 `--resolve-owners` 时，带 ownerReferences 的 PVC 会被直接跳过，
+不会查询它的 owner 对象。
 
 对于没有 ownerReferences 的 PVC，scanner 会在扫描范围内列出 Pod，并跳过被
-非 `Succeeded` / `Failed` 状态 Pod 引用的 PVC。这个过滤只作用于
-`noOwnerReferences`；如果 PVC 有断裂的 ownerReferences，即使被 Pod 引用仍然会
-被报告。
+非 `Succeeded` / `Failed` 状态 Pod 引用的 PVC。默认模式和 `--resolve-owners`
+模式都会应用这个过滤。
 
 ## 输出
 
@@ -76,8 +86,8 @@ ownerReferences 的 PVC。
 为了减少噪音，scanner 不会报告仍被活跃 Pod 引用的无 ownerReferences PVC。
 
 `ownerNotFound`、`ownerUIDMismatch`、`ownerGVKNotFound` 和
-`ownerInvalidScope` 是更强的 orphan 信号，但删除前仍然应该结合业务和 workload
-上下文人工复核。
+`ownerInvalidScope` 是更强的 orphan 信号，但只有设置 `--resolve-owners` 后才会
+出现，删除前仍然应该结合业务和 workload 上下文人工复核。
 
 ## Kubernetes Job
 
@@ -94,14 +104,14 @@ Job 会把 CSV 输出到 stdout。需要本地审阅文件时，可以重定向 
 kubectl logs -n orphaned-pvc-scanner job/orphaned-pvc-scanner > orphaned-pvcs.csv
 ```
 
-默认 RBAC 是只读权限，可以验证常见 workload owner，例如 Pod、
-ReplicationController、Deployment、ReplicaSet、StatefulSet、DaemonSet、Job 和
-CronJob。如果 PVC 的 owner 是 CRD 或其他资源类型，需要给这个 ServiceAccount
-额外授予对应 owner 资源的只读 `get`/`list` 权限；否则这些 PVC 可能会被报告为
-`ownerLookupError`。
+默认 RBAC 是只读且刻意收窄的权限：可以列 PVC、读取绑定 PV，并列 Pod 以避免报告
+仍在使用中的无 ownerReferences PVC。默认 RBAC 不授予 discovery 或 owner 资源
+权限。如果要启用 `--resolve-owners`，需要给这个 ServiceAccount 额外授予对应
+discovery 和 owner 资源类型的只读 `get`/`list` 权限。
 
 ## 参数
 
 - `--kubeconfig` kubeconfig 路径；可用时回退到 in-cluster config
 - `--namespace` 要扫描的 namespace；为空表示扫描所有 namespace
 - `--output` 输出格式：`table`、`csv` 或 `jsonl`；默认是 `table`
+- `--resolve-owners` 通过查询 owner 对象解析 ownerReferences；默认关闭
