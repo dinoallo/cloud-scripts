@@ -28,7 +28,7 @@ spec:
               case "${output_file}" in
                 */*) mkdir -p "${output_file%/*}" ;;
               esac
-              set -- --instance "${TEMPLATE_INSTANCE}" ${SCANNER_ARGS:-} --output csv
+              set -- ${SCANNER_ARGS:-} --output csv
               "${scanner_bin}" "$@" > "${output_file}"
 
               echo "CSV written to ${output_file}"
@@ -40,10 +40,8 @@ spec:
                 tail -f /dev/null
               fi
           env:
-            - name: TEMPLATE_INSTANCE
-              value: CHANGE_ME
             - name: SCANNER_ARGS
-              value: "--discover-orphans"
+              value: ""
             - name: OUTPUT_FILE
               value: /scan-output/pvc-scan.csv
             - name: HOLD_AFTER_SCAN

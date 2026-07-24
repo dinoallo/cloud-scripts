@@ -4,13 +4,11 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -25,8 +23,11 @@ import (
 )
 
 const (
-	templateDeployKey = "cloud.sealos.io/deploy-on-sealos"
-	legacyAppLabelKey = "app"
+	templateDeployKey  = "cloud.sealos.io/deploy-on-sealos"
+	appDeployKey       = "cloud.sealos.io/app-deploy-manager"
+	legacyAppLabelKey  = "app"
+	pathAnnotationKey  = "path"
+	valueAnnotationKey = "value"
 
 	outputTable = "table"
 	outputCSV   = "csv"
@@ -37,8 +38,8 @@ var outputHeaders = []string{
 	"namespace",
 	"pvc",
 	"pv",
-	"statefulset",
-	"claimTemplate",
+	"path",
+	"value",
 	"reason",
 	"pvcPhase",
 	"pvPhase",
@@ -67,8 +68,8 @@ func (s *stringList) Set(value string) error {
 type options struct {
 	kubeconfig      string
 	namespace       string
-	instance        string
 	output          string
+	instance        string
 	statefulSets    stringList
 	claimTemplates  stringList
 	discoverOrphans bool
@@ -77,8 +78,8 @@ type options struct {
 type targetPVC struct {
 	namespace         string
 	name              string
-	statefulSet       string
-	claimTemplate     string
+	path              string
+	value             string
 	reason            string
 	pvc               *corev1.PersistentVolumeClaim
 	pv                *corev1.PersistentVolume
@@ -89,8 +90,8 @@ type outputRow struct {
 	Namespace         string `json:"namespace"`
 	PVC               string `json:"pvc"`
 	PV                string `json:"pv"`
-	StatefulSet       string `json:"statefulset"`
-	ClaimTemplate     string `json:"claimTemplate"`
+	Path              string `json:"path"`
+	Value             string `json:"value"`
 	Reason            string `json:"reason"`
 	PVCPhase          string `json:"pvcPhase"`
 	PVPhase           string `json:"pvPhase"`
@@ -112,22 +113,20 @@ func parseFlags() options {
 	var opts options
 	flag.StringVar(&opts.kubeconfig, "kubeconfig", "", "path to kubeconfig")
 	flag.StringVar(&opts.namespace, "namespace", "", "namespace to scan; empty scans all namespaces")
-	flag.StringVar(&opts.instance, "instance", "", "template instance name used by cloud.sealos.io/deploy-on-sealos")
 	flag.StringVar(&opts.output, "output", outputTable, "output format: table, csv, or jsonl")
-	flag.Var(&opts.statefulSets, "statefulset", "StatefulSet name to inspect; repeat for multiple values")
-	flag.Var(&opts.claimTemplates, "claim-template", "volumeClaimTemplate name for orphan scanning; repeat for multiple values")
-	flag.BoolVar(&opts.discoverOrphans, "discover-orphans", false, "discover orphan StatefulSet PVCs from legacy app labels when the StatefulSet name is unknown")
+	flag.StringVar(&opts.instance, "instance", "", "deprecated and ignored; PVC-only scanning does not use template instance scope")
+	flag.Var(&opts.statefulSets, "statefulset", "deprecated and ignored; PVC-only scanning does not inspect StatefulSets")
+	flag.Var(&opts.claimTemplates, "claim-template", "deprecated and ignored; PVC-only scanning does not inspect volumeClaimTemplates")
+	flag.BoolVar(&opts.discoverOrphans, "discover-orphans", false, "deprecated and ignored; PVC-only orphan discovery is always enabled")
 	flag.Parse()
 	return opts
 }
 
 func run(ctx context.Context, opts options) error {
-	if opts.instance == "" {
-		return errors.New("--instance is required to keep scanning scoped to one template instance")
-	}
 	if err := validateOutputFormat(opts.output); err != nil {
 		return err
 	}
+	warnDeprecatedScopeFlags(opts)
 
 	client, err := buildClient(opts.kubeconfig)
 	if err != nil {
@@ -153,43 +152,12 @@ func collectTargets(ctx context.Context, client kubernetes.Interface, opts optio
 	if err != nil {
 		return nil, err
 	}
-
-	var targets []targetPVC
-	seen := map[string]struct{}{}
-
-	add := func(target targetPVC) {
-		key := target.namespace + "/" + target.name
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		targets = append(targets, target)
-	}
-
-	liveTargets, err := collectLiveStatefulSetTargets(ctx, client, opts, pvcs.Items)
+	pods, err := client.CoreV1().Pods(opts.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	for _, target := range liveTargets {
-		add(target)
-	}
 
-	orphanTargets, err := collectExplicitOrphanTargets(ctx, client, opts, pvcs.Items)
-	if err != nil {
-		return nil, err
-	}
-	for _, target := range orphanTargets {
-		add(target)
-	}
-
-	discoveredTargets, err := collectDiscoveredOrphanTargets(ctx, client, opts, pvcs.Items)
-	if err != nil {
-		return nil, err
-	}
-	for _, target := range discoveredTargets {
-		add(target)
-	}
-
+	targets := collectPVCOnlyTargets(pvcs.Items, collectUsedPVCs(pods.Items))
 	for i := range targets {
 		pv, matched, err := lookupBoundPV(ctx, client, targets[i].pvc)
 		if err != nil {
@@ -202,192 +170,78 @@ func collectTargets(ctx context.Context, client kubernetes.Interface, opts optio
 	return targets, nil
 }
 
-func collectDiscoveredOrphanTargets(ctx context.Context, client kubernetes.Interface, opts options, pvcs []corev1.PersistentVolumeClaim) ([]targetPVC, error) {
-	if !opts.discoverOrphans {
-		return nil, nil
-	}
-
-	liveNames := map[string]struct{}{}
-	live, err := client.AppsV1().StatefulSets(opts.namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	for _, sts := range live.Items {
-		liveNames[namespacedName(sts.Namespace, sts.Name)] = struct{}{}
-	}
-
-	requestedStatefulSets := toSet(opts.statefulSets)
-	requestedClaimTemplates := toSet(opts.claimTemplates)
-
+func collectPVCOnlyTargets(pvcs []corev1.PersistentVolumeClaim, usedPVCs map[string]struct{}) []targetPVC {
 	var targets []targetPVC
 	for i := range pvcs {
 		pvc := &pvcs[i]
-		if !isBugAffectedPVC(pvc) {
-			continue
-		}
-
-		statefulSetName := pvc.Labels[legacyAppLabelKey]
-		if statefulSetName == "" {
-			continue
-		}
-		if _, exists := liveNames[namespacedName(pvc.Namespace, statefulSetName)]; exists {
-			continue
-		}
-		if len(requestedStatefulSets) > 0 {
-			if _, ok := requestedStatefulSets[statefulSetName]; !ok {
-				continue
-			}
-		}
-
-		claimTemplate, ok := inferClaimTemplateFromLegacyAppPVC(pvc.Name, statefulSetName)
+		path, value, ok := templateStoreAnnotations(pvc)
 		if !ok {
 			continue
 		}
-		if len(requestedClaimTemplates) > 0 {
-			if _, ok := requestedClaimTemplates[claimTemplate]; !ok {
-				continue
-			}
+		if hasOwnershipLabel(pvc) {
+			continue
 		}
-
+		if _, ok := usedPVCs[namespacedName(pvc.Namespace, pvc.Name)]; ok {
+			continue
+		}
 		targets = append(targets, targetPVC{
-			namespace:     pvc.Namespace,
-			name:          pvc.Name,
-			statefulSet:   statefulSetName,
-			claimTemplate: claimTemplate,
-			reason:        "discovered orphan StatefulSet PVC from legacy app label and StatefulSet PVC name",
-			pvc:           pvc.DeepCopy(),
+			namespace: pvc.Namespace,
+			name:      pvc.Name,
+			path:      path,
+			value:     value,
+			reason:    "PVC has path/value annotations, lacks template/app ownership labels, and is not referenced by any active pod",
+			pvc:       pvc.DeepCopy(),
 		})
 	}
 
-	return targets, nil
+	return targets
 }
 
-func collectLiveStatefulSetTargets(ctx context.Context, client kubernetes.Interface, opts options, pvcs []corev1.PersistentVolumeClaim) ([]targetPVC, error) {
-	stsList, err := client.AppsV1().StatefulSets(opts.namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("%s=%s", templateDeployKey, opts.instance),
-	})
-	if err != nil {
-		return nil, err
-	}
+func templateStoreAnnotations(pvc *corev1.PersistentVolumeClaim) (string, string, bool) {
+	path := strings.TrimSpace(pvc.Annotations[pathAnnotationKey])
+	value := strings.TrimSpace(pvc.Annotations[valueAnnotationKey])
+	return path, value, path != "" && value != ""
+}
 
-	requested := toSet(opts.statefulSets)
-	var targets []targetPVC
-
-	for _, sts := range stsList.Items {
-		if len(requested) > 0 {
-			if _, ok := requested[sts.Name]; !ok {
-				continue
-			}
+func hasOwnershipLabel(pvc *corev1.PersistentVolumeClaim) bool {
+	for _, key := range []string{templateDeployKey, appDeployKey, legacyAppLabelKey} {
+		if _, ok := pvc.Labels[key]; ok {
+			return true
 		}
-		if sts.Spec.PersistentVolumeClaimRetentionPolicy != nil &&
-			sts.Spec.PersistentVolumeClaimRetentionPolicy.WhenDeleted == "Delete" {
+	}
+	return false
+}
+
+func collectUsedPVCs(pods []corev1.Pod) map[string]struct{} {
+	used := map[string]struct{}{}
+	for i := range pods {
+		pod := &pods[i]
+		if isTerminalPod(pod) {
 			continue
 		}
-
-		for _, claimTemplate := range sts.Spec.VolumeClaimTemplates {
-			if claimTemplate.Labels[templateDeployKey] == opts.instance {
+		for _, volume := range pod.Spec.Volumes {
+			if volume.PersistentVolumeClaim == nil || volume.PersistentVolumeClaim.ClaimName == "" {
 				continue
 			}
-
-			for i := range pvcs {
-				if pvcs[i].Namespace != sts.Namespace {
-					continue
-				}
-				if !isStatefulSetPVC(pvcs[i].Name, sts.Name, claimTemplate.Name) {
-					continue
-				}
-				if !isBugAffectedPVC(&pvcs[i]) {
-					continue
-				}
-				targets = append(targets, targetPVC{
-					namespace:     pvcs[i].Namespace,
-					name:          pvcs[i].Name,
-					statefulSet:   sts.Name,
-					claimTemplate: claimTemplate.Name,
-					reason:        "live StatefulSet has instance label but its volumeClaimTemplate lacks that label",
-					pvc:           pvcs[i].DeepCopy(),
-				})
-			}
+			used[namespacedName(pod.Namespace, volume.PersistentVolumeClaim.ClaimName)] = struct{}{}
 		}
 	}
-
-	return targets, nil
+	return used
 }
 
-func collectExplicitOrphanTargets(ctx context.Context, client kubernetes.Interface, opts options, pvcs []corev1.PersistentVolumeClaim) ([]targetPVC, error) {
-	if len(opts.statefulSets) == 0 && len(opts.claimTemplates) == 0 {
-		return nil, nil
-	}
-	if len(opts.statefulSets) == 0 || len(opts.claimTemplates) == 0 {
-		return nil, errors.New("--statefulset and --claim-template must be provided together for orphan scanning")
-	}
-
-	liveNames := map[string]struct{}{}
-	live, err := client.AppsV1().StatefulSets(opts.namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	for _, sts := range live.Items {
-		liveNames[namespacedName(sts.Namespace, sts.Name)] = struct{}{}
-	}
-
-	var targets []targetPVC
-	for _, stsName := range opts.statefulSets {
-		for _, claimTemplate := range opts.claimTemplates {
-			for i := range pvcs {
-				if !isStatefulSetPVC(pvcs[i].Name, stsName, claimTemplate) {
-					continue
-				}
-				if !isBugAffectedPVC(&pvcs[i]) {
-					continue
-				}
-
-				_, statefulSetStillExists := liveNames[namespacedName(pvcs[i].Namespace, stsName)]
-				if !statefulSetStillExists && !hasLegacyAppEvidence(&pvcs[i], stsName, opts.instance) {
-					continue
-				}
-
-				targets = append(targets, targetPVC{
-					namespace:     pvcs[i].Namespace,
-					name:          pvcs[i].Name,
-					statefulSet:   stsName,
-					claimTemplate: claimTemplate,
-					reason:        "explicit orphan StatefulSet PVC pattern with legacy app label evidence",
-					pvc:           pvcs[i].DeepCopy(),
-				})
-			}
-		}
-	}
-
-	return targets, nil
-}
-
-func isBugAffectedPVC(pvc *corev1.PersistentVolumeClaim) bool {
-	_, hasTemplateDeployLabel := pvc.Labels[templateDeployKey]
-	return !hasTemplateDeployLabel
+func isTerminalPod(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
 }
 
 func namespacedName(namespace, name string) string {
 	return namespace + "/" + name
 }
 
-func hasLegacyAppEvidence(pvc *corev1.PersistentVolumeClaim, statefulSetName, instance string) bool {
-	value := pvc.Labels[legacyAppLabelKey]
-	return value == statefulSetName || value == instance
-}
-
-func isStatefulSetPVC(pvcName, statefulSetName, claimTemplate string) bool {
-	pattern := fmt.Sprintf("^%s-%s-[0-9]+$", regexp.QuoteMeta(claimTemplate), regexp.QuoteMeta(statefulSetName))
-	return regexp.MustCompile(pattern).MatchString(pvcName)
-}
-
-func inferClaimTemplateFromLegacyAppPVC(pvcName, legacyApp string) (string, bool) {
-	pattern := fmt.Sprintf("^(.+)-%s-[0-9]+$", regexp.QuoteMeta(legacyApp))
-	matches := regexp.MustCompile(pattern).FindStringSubmatch(pvcName)
-	if len(matches) != 2 || matches[1] == "" {
-		return "", false
+func warnDeprecatedScopeFlags(opts options) {
+	if opts.instance == "" && len(opts.statefulSets) == 0 && len(opts.claimTemplates) == 0 && !opts.discoverOrphans {
+		return
 	}
-	return matches[1], true
+	fmt.Fprintln(os.Stderr, "warning: --instance, --statefulset, --claim-template, and --discover-orphans are deprecated and ignored; template-pvc-scanner now uses PVC-only discovery")
 }
 
 func lookupBoundPV(ctx context.Context, client kubernetes.Interface, pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolume, bool, error) {
@@ -456,8 +310,8 @@ func makeOutputRow(target targetPVC, now time.Time) outputRow {
 	row := outputRow{
 		Namespace:         target.namespace,
 		PVC:               target.name,
-		StatefulSet:       target.statefulSet,
-		ClaimTemplate:     target.claimTemplate,
+		Path:              target.path,
+		Value:             target.value,
 		Reason:            target.reason,
 		PVClaimRefMatched: target.pvClaimRefMatched,
 	}
@@ -481,11 +335,11 @@ func makeOutputRow(target targetPVC, now time.Time) outputRow {
 
 func writeTableOutput(w io.Writer, rows []outputRow) error {
 	if len(rows) == 0 {
-		_, err := fmt.Fprintln(w, "no bug-affected PVC/PV targets found")
+		_, err := fmt.Fprintln(w, "no path/value PVC/PV candidates found")
 		return err
 	}
 
-	if _, err := fmt.Fprintf(w, "found %d bug-affected PVC/PV candidate(s)\n", len(rows)); err != nil {
+	if _, err := fmt.Fprintf(w, "found %d path/value PVC/PV candidate(s)\n", len(rows)); err != nil {
 		return err
 	}
 
@@ -536,8 +390,8 @@ func (r outputRow) csvRecord() []string {
 		r.Namespace,
 		r.PVC,
 		r.PV,
-		r.StatefulSet,
-		r.ClaimTemplate,
+		r.Path,
+		r.Value,
 		r.Reason,
 		r.PVCPhase,
 		r.PVPhase,
@@ -622,12 +476,4 @@ func defaultKubeconfig() string {
 		return ""
 	}
 	return filepath.Join(home, ".kube", "config")
-}
-
-func toSet(items []string) map[string]struct{} {
-	out := map[string]struct{}{}
-	for _, item := range items {
-		out[item] = struct{}{}
-	}
-	return out
 }

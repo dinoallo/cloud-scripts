@@ -1,15 +1,16 @@
 # template-pvc-cleaner
 
-Clean up PVC/PV objects left by the Sealos template frontend PVC deletion bug.
+Clean up PVC/PV objects left by the Sealos template/applaunchpad PVC deletion
+bug.
 
-The affected template frontend version can create a StatefulSet with
-`cloud.sealos.io/deploy-on-sealos=<instance>`, while the StatefulSet
-`volumeClaimTemplates` do not copy that label to generated PVCs. Instance
-deletion logic that deletes PVCs by the instance label then misses those
-StatefulSet PVCs. The StatefulSet may be removed by garbage collection, while
-the PVC and its bound PV remain.
+Affected local-store PVCs are generated from StatefulSet
+`volumeClaimTemplates` that carry `path` and `value` annotations, but miss the
+labels used by the delete path. When the app or template instance is deleted,
+the StatefulSet may be removed while its PVC and bound PV remain.
 
-The cleaner is dry-run by default. It only deletes after `--confirm` is passed.
+The cleaner does not inspect StatefulSets and does not need a StatefulSet or
+template instance name. It is dry-run by default and only deletes after
+`--confirm` is passed.
 
 ## Build
 
@@ -19,91 +20,58 @@ go build -o template-pvc-cleaner .
 
 ## Usage
 
-When the StatefulSet still exists, the cleaner can discover affected PVCs from
-live StatefulSets with the template instance label:
+Review one namespace first. Without `--confirm`, the cleaner only prints the
+planned PVC/PV targets:
 
 ```bash
-./template-pvc-cleaner \
-  --namespace prod \
-  --instance my-template-instance
+./template-pvc-cleaner --namespace prod
 ```
 
-When the StatefulSet has already been deleted but the StatefulSet name and
-volumeClaimTemplate name are known, provide them explicitly:
+After reviewing the dry-run output, add `--confirm` to delete the matching PVCs
+and their guarded leftover PVs:
 
 ```bash
 ./template-pvc-cleaner \
   --namespace prod \
-  --instance my-template-instance \
-  --statefulset mysql \
-  --claim-template data
+  --confirm
 ```
 
-When the StatefulSet has already been deleted and its name is unknown, use
-conservative orphan discovery:
+Use `--delete-pv=false` if you only want to delete PVCs and leave PVs untouched:
 
 ```bash
 ./template-pvc-cleaner \
   --namespace prod \
-  --instance my-template-instance \
-  --discover-orphans
-```
-
-Review the dry-run output first. Add `--confirm` only after the target list is
-verified:
-
-```bash
-./template-pvc-cleaner \
-  --namespace prod \
-  --instance my-template-instance \
-  --statefulset mysql \
-  --claim-template data \
+  --delete-pv=false \
   --confirm
 ```
 
 ## Safety Rules
 
-The cleaner scopes every run to a single namespace and template instance.
+The cleaner always requires `--namespace`; it will not run across all namespaces
+in one command.
 
-It only treats a PVC as affected when the PVC has no
-`cloud.sealos.io/deploy-on-sealos` label. PVCs that already carry that label are
-not deleted.
+It deletes a PVC only when all of these are true:
 
-Live StatefulSet mode requires:
+- the PVC has non-empty `path` and `value` annotations
+- the PVC has none of these ownership labels: `cloud.sealos.io/deploy-on-sealos`,
+  `cloud.sealos.io/app-deploy-manager`, `app`
+- no active Pod references the PVC in the same namespace
 
-- a StatefulSet selected by `cloud.sealos.io/deploy-on-sealos=<instance>`
-- a `volumeClaimTemplate` that lacks that same label
-- a PVC name matching `<claim-template>-<statefulset>-<ordinal>`
-
-Explicit orphan mode requires:
-
-- `--statefulset` and `--claim-template`
-- a PVC name matching `<claim-template>-<statefulset>-<ordinal>`
-- by default, legacy `app=<statefulset>` or `app=<instance>` evidence
-
-`--discover-orphans` mode requires:
-
-- no `cloud.sealos.io/deploy-on-sealos` label on the PVC
-- legacy `app=<statefulset>` label on the PVC
-- PVC name matching `<claim-template>-<statefulset>-<ordinal>`
-- no live StatefulSet with that `app` name
+Pods in `Succeeded` or `Failed` phase are treated as terminal and do not block a
+candidate. Pending, Running, Unknown, and not-yet-phased Pods block deletion.
 
 PV deletion is also guarded. A bound PV is deleted only when its `claimRef`
-still points to the captured target PVC namespace, name, and UID.
+still points to the captured target PVC namespace, name, and UID. If the
+`claimRef` changes, the cleaner refuses to delete that PV.
 
-Avoid `--allow-name-only` in production unless the target PVCs were manually
-reviewed. It relaxes the legacy label evidence requirement for explicit orphan
-cleanup.
+Deprecated scope flags `--instance`, `--statefulset`, `--claim-template`,
+`--discover-orphans`, and `--allow-name-only` are rejected instead of ignored,
+because they no longer narrow PVC-only cleanup.
 
 ## Options
 
 - `--kubeconfig` kubeconfig path; falls back to in-cluster config when available
 - `--namespace` namespace containing leftover template PVCs
-- `--instance` template instance name
-- `--statefulset` StatefulSet name to inspect; repeat for multiple values
-- `--claim-template` volumeClaimTemplate name; repeat for multiple values
-- `--discover-orphans` discover orphan StatefulSet PVCs from legacy `app` labels
 - `--confirm` delete matching PVCs/PVs; without it, only print a dry-run plan
 - `--delete-pv=false` delete only PVCs, leaving PVs untouched
-- `--allow-name-only` allow explicit orphan cleanup without legacy label evidence
 - `--wait` maximum time to wait for each PVC/PV deletion
