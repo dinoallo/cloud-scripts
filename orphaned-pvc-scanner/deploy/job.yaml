@@ -17,7 +17,7 @@ spec:
       serviceAccountName: orphaned-pvc-scanner
       containers:
         - name: scanner
-          image: ghcr.io/dinoallo/orphaned-pvc-scanner:latest
+          image: ghcr.io/dinoallo/orphaned-pvc-scanner:sha-561ba04
           imagePullPolicy: IfNotPresent
           args:
             - --output

@@ -80,8 +80,9 @@ namespace,pvc,pv,ownerStatus,reason,pvcPhase,pvPhase,pvReclaimPolicy,pvClaimRefM
 ```
 
 The PV fields are populated when the PVC has `spec.volumeName` and the bound PV
-can be read. `pvClaimRefMatched` shows whether the PV still points back to the
-candidate PVC.
+is present in the cluster PV list. The scanner lists PVs once and matches them
+locally, instead of issuing one PV request per candidate PVC. `pvClaimRefMatched`
+shows whether the PV still points back to the candidate PVC.
 
 JSON Lines output keeps the full row object, including ownerReference details,
 PVC size, and PVC age, for follow-up automation.
@@ -113,8 +114,8 @@ The Job writes CSV to stdout. Redirect logs locally when you want a review file:
 kubectl logs -n orphaned-pvc-scanner job/orphaned-pvc-scanner > orphaned-pvcs.csv
 ```
 
-The default RBAC is read-only and intentionally minimal. It can list PVCs, get
-bound PVs, and list Pods to avoid reporting no-owner PVCs that are still in use.
+The default RBAC is read-only and intentionally minimal. It can list PVCs, list
+PVs, and list Pods to avoid reporting no-owner PVCs that are still in use.
 It does not grant discovery or owner resource permissions. If you enable
 `--resolve-owners`, grant this ServiceAccount additional read-only discovery and
 owner resource `get`/`list` permissions for the resource types you want to

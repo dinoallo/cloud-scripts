@@ -75,7 +75,8 @@ CSV 和 table 输出使用这些便于人工审阅的字段：
 namespace,pvc,pv,ownerStatus,reason,pvcPhase,pvPhase,pvReclaimPolicy,pvClaimRefMatched,pvcStorageClass
 ```
 
-当 PVC 有 `spec.volumeName` 且 scanner 能读取对应 PV 时，会填充 PV 字段。
+当 PVC 有 `spec.volumeName` 且对应 PV 出现在集群 PV 列表中时，会填充 PV 字段。
+scanner 会一次列出 PV 后在本地匹配，而不是对每个候选 PVC 单独请求一次 PV。
 `pvClaimRefMatched` 表示 PV 是否仍然反向指向这个 PVC。
 
 JSON Lines 输出仍保留完整 row object，包括 ownerReference 详情、PVC size 和
@@ -107,7 +108,7 @@ Job 会把 CSV 输出到 stdout。需要本地审阅文件时，可以重定向 
 kubectl logs -n orphaned-pvc-scanner job/orphaned-pvc-scanner > orphaned-pvcs.csv
 ```
 
-默认 RBAC 是只读且刻意收窄的权限：可以列 PVC、读取绑定 PV，并列 Pod 以避免报告
+默认 RBAC 是只读且刻意收窄的权限：可以列 PVC、列 PV，并列 Pod 以避免报告
 仍在使用中的无 ownerReferences PVC。默认 RBAC 不授予 discovery 或 owner 资源
 权限。如果要启用 `--resolve-owners`，需要给这个 ServiceAccount 额外授予对应
 discovery 和 owner 资源类型的只读 `get`/`list` 权限。
