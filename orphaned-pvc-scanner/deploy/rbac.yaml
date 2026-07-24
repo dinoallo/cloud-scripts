@@ -20,7 +20,7 @@ rules:
     resources:
       - persistentvolumes
     verbs:
-      - get
+      - list
   - apiGroups:
       - ""
     resources:

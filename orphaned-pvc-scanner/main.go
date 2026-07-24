@@ -230,16 +230,31 @@ func collectTargets(ctx context.Context, client kubernetes.Interface, resolver o
 		})
 	}
 
+	if !hasBoundPVC(targets) {
+		return targets, nil
+	}
+
+	pvs, err := collectPVs(ctx, client)
+	if err != nil {
+		return nil, fmt.Errorf("list PVs to identify bound volumes: %w", err)
+	}
+
 	for i := range targets {
-		pv, matched, err := lookupBoundPV(ctx, client, targets[i].pvc)
-		if err != nil {
-			return nil, err
-		}
+		pv, matched := pvs.BoundPV(targets[i].pvc)
 		targets[i].pv = pv
 		targets[i].pvClaimRefMatched = matched
 	}
 
 	return targets, nil
+}
+
+func hasBoundPVC(targets []targetPVC) bool {
+	for _, target := range targets {
+		if target.pvc != nil && target.pvc.Spec.VolumeName != "" {
+			return true
+		}
+	}
+	return false
 }
 
 type pvcUsageIndex map[types.NamespacedName]struct{}
@@ -507,20 +522,31 @@ func ownerCheckFromReference(pvc *corev1.PersistentVolumeClaim, ref metav1.Owner
 	return check
 }
 
-func lookupBoundPV(ctx context.Context, client kubernetes.Interface, pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolume, bool, error) {
-	if pvc.Spec.VolumeName == "" {
-		return nil, false, nil
-	}
+type pvIndex map[string]*corev1.PersistentVolume
 
-	pv, err := client.CoreV1().PersistentVolumes().Get(ctx, pvc.Spec.VolumeName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil, false, nil
-	}
+func collectPVs(ctx context.Context, client kubernetes.Interface) (pvIndex, error) {
+	pvs, err := client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
-	return pv, pvClaimRefMatches(pv, pvc), nil
+	index := pvIndex{}
+	for i := range pvs.Items {
+		pv := pvs.Items[i].DeepCopy()
+		index[pv.Name] = pv
+	}
+	return index, nil
+}
+
+func (i pvIndex) BoundPV(pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolume, bool) {
+	if pvc.Spec.VolumeName == "" {
+		return nil, false
+	}
+	pv := i[pvc.Spec.VolumeName]
+	if pv == nil {
+		return nil, false
+	}
+	return pv.DeepCopy(), pvClaimRefMatches(pv, pvc)
 }
 
 func pvClaimRefMatches(pv *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) bool {
