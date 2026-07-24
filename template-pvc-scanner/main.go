@@ -15,7 +15,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -25,7 +24,6 @@ import (
 const (
 	templateDeployKey  = "cloud.sealos.io/deploy-on-sealos"
 	appDeployKey       = "cloud.sealos.io/app-deploy-manager"
-	legacyAppLabelKey  = "app"
 	pathAnnotationKey  = "path"
 	valueAnnotationKey = "value"
 
@@ -37,14 +35,10 @@ const (
 var outputHeaders = []string{
 	"namespace",
 	"pvc",
-	"pv",
 	"path",
 	"value",
 	"reason",
 	"pvcPhase",
-	"pvPhase",
-	"pvReclaimPolicy",
-	"pvClaimRefMatched",
 	"pvcStorageClass",
 	"pvcSize",
 	"pvcAge",
@@ -76,30 +70,24 @@ type options struct {
 }
 
 type targetPVC struct {
-	namespace         string
-	name              string
-	path              string
-	value             string
-	reason            string
-	pvc               *corev1.PersistentVolumeClaim
-	pv                *corev1.PersistentVolume
-	pvClaimRefMatched bool
+	namespace string
+	name      string
+	path      string
+	value     string
+	reason    string
+	pvc       *corev1.PersistentVolumeClaim
 }
 
 type outputRow struct {
-	Namespace         string `json:"namespace"`
-	PVC               string `json:"pvc"`
-	PV                string `json:"pv"`
-	Path              string `json:"path"`
-	Value             string `json:"value"`
-	Reason            string `json:"reason"`
-	PVCPhase          string `json:"pvcPhase"`
-	PVPhase           string `json:"pvPhase"`
-	PVReclaimPolicy   string `json:"pvReclaimPolicy"`
-	PVClaimRefMatched bool   `json:"pvClaimRefMatched"`
-	PVCStorageClass   string `json:"pvcStorageClass"`
-	PVCSize           string `json:"pvcSize"`
-	PVCAge            string `json:"pvcAge"`
+	Namespace       string `json:"namespace"`
+	PVC             string `json:"pvc"`
+	Path            string `json:"path"`
+	Value           string `json:"value"`
+	Reason          string `json:"reason"`
+	PVCPhase        string `json:"pvcPhase"`
+	PVCStorageClass string `json:"pvcStorageClass"`
+	PVCSize         string `json:"pvcSize"`
+	PVCAge          string `json:"pvcAge"`
 }
 
 func main() {
@@ -157,17 +145,7 @@ func collectTargets(ctx context.Context, client kubernetes.Interface, opts optio
 		return nil, err
 	}
 
-	targets := collectPVCOnlyTargets(pvcs.Items, collectUsedPVCs(pods.Items))
-	for i := range targets {
-		pv, matched, err := lookupBoundPV(ctx, client, targets[i].pvc)
-		if err != nil {
-			return nil, err
-		}
-		targets[i].pv = pv
-		targets[i].pvClaimRefMatched = matched
-	}
-
-	return targets, nil
+	return collectPVCOnlyTargets(pvcs.Items, collectUsedPVCs(pods.Items)), nil
 }
 
 func collectPVCOnlyTargets(pvcs []corev1.PersistentVolumeClaim, usedPVCs map[string]struct{}) []targetPVC {
@@ -189,7 +167,7 @@ func collectPVCOnlyTargets(pvcs []corev1.PersistentVolumeClaim, usedPVCs map[str
 			name:      pvc.Name,
 			path:      path,
 			value:     value,
-			reason:    "PVC has path/value annotations, lacks template/app ownership labels, and is not referenced by any active pod",
+			reason:    "PVC has path/value annotations, lacks Sealos template ownership labels, and is not referenced by any active pod",
 			pvc:       pvc.DeepCopy(),
 		})
 	}
@@ -204,7 +182,7 @@ func templateStoreAnnotations(pvc *corev1.PersistentVolumeClaim) (string, string
 }
 
 func hasOwnershipLabel(pvc *corev1.PersistentVolumeClaim) bool {
-	for _, key := range []string{templateDeployKey, appDeployKey, legacyAppLabelKey} {
+	for _, key := range []string{templateDeployKey, appDeployKey} {
 		if _, ok := pvc.Labels[key]; ok {
 			return true
 		}
@@ -244,36 +222,6 @@ func warnDeprecatedScopeFlags(opts options) {
 	fmt.Fprintln(os.Stderr, "warning: --instance, --statefulset, --claim-template, and --discover-orphans are deprecated and ignored; template-pvc-scanner now uses PVC-only discovery")
 }
 
-func lookupBoundPV(ctx context.Context, client kubernetes.Interface, pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolume, bool, error) {
-	if pvc.Spec.VolumeName == "" {
-		return nil, false, nil
-	}
-
-	pv, err := client.CoreV1().PersistentVolumes().Get(ctx, pvc.Spec.VolumeName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-
-	return pv, pvClaimRefMatches(pv, pvc), nil
-}
-
-func pvClaimRefMatches(pv *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) bool {
-	ref := pv.Spec.ClaimRef
-	if ref == nil {
-		return false
-	}
-	if ref.Namespace != pvc.Namespace || ref.Name != pvc.Name {
-		return false
-	}
-	if ref.UID != "" && pvc.UID != "" && ref.UID != pvc.UID {
-		return false
-	}
-	return true
-}
-
 func validateOutputFormat(format string) error {
 	switch format {
 	case outputTable, outputCSV, outputJSONL:
@@ -308,12 +256,11 @@ func makeOutputRows(targets []targetPVC, now time.Time) []outputRow {
 
 func makeOutputRow(target targetPVC, now time.Time) outputRow {
 	row := outputRow{
-		Namespace:         target.namespace,
-		PVC:               target.name,
-		Path:              target.path,
-		Value:             target.value,
-		Reason:            target.reason,
-		PVClaimRefMatched: target.pvClaimRefMatched,
+		Namespace: target.namespace,
+		PVC:       target.name,
+		Path:      target.path,
+		Value:     target.value,
+		Reason:    target.reason,
 	}
 
 	if target.pvc != nil {
@@ -324,22 +271,16 @@ func makeOutputRow(target targetPVC, now time.Time) outputRow {
 		row.PVCSize = storageRequest(target.pvc)
 		row.PVCAge = formatAge(target.pvc.CreationTimestamp, now)
 	}
-	if target.pv != nil {
-		row.PV = target.pv.Name
-		row.PVPhase = string(target.pv.Status.Phase)
-		row.PVReclaimPolicy = string(target.pv.Spec.PersistentVolumeReclaimPolicy)
-	}
-
 	return row
 }
 
 func writeTableOutput(w io.Writer, rows []outputRow) error {
 	if len(rows) == 0 {
-		_, err := fmt.Fprintln(w, "no path/value PVC/PV candidates found")
+		_, err := fmt.Fprintln(w, "no path/value PVC candidates found")
 		return err
 	}
 
-	if _, err := fmt.Fprintf(w, "found %d path/value PVC/PV candidate(s)\n", len(rows)); err != nil {
+	if _, err := fmt.Fprintf(w, "found %d path/value PVC candidate(s)\n", len(rows)); err != nil {
 		return err
 	}
 
@@ -389,14 +330,10 @@ func (r outputRow) csvRecord() []string {
 	return []string{
 		r.Namespace,
 		r.PVC,
-		r.PV,
 		r.Path,
 		r.Value,
 		r.Reason,
 		r.PVCPhase,
-		r.PVPhase,
-		r.PVReclaimPolicy,
-		fmt.Sprintf("%t", r.PVClaimRefMatched),
 		r.PVCStorageClass,
 		r.PVCSize,
 		r.PVCAge,

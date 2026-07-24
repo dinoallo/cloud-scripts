@@ -1,4 +1,4 @@
-module template-pvc-cleaner
+module pvc-cleaner
 
 go 1.22.0
 

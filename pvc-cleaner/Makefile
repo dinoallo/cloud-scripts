@@ -1,4 +1,4 @@
-APP := template-pvc-cleaner
+APP := pvc-cleaner
 BIN_DIR := bin
 BIN := $(BIN_DIR)/$(APP)
 GOCACHE ?= /tmp/$(APP)-gocache

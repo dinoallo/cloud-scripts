@@ -1,7 +1,8 @@
 # template-pvc-scanner
 
-Scan for PVC/PV candidates left by the Sealos template/applaunchpad PVC
-deletion bug. This is the read-only companion to `template-pvc-cleaner`.
+Scan for PVC candidates left by the Sealos template/applaunchpad PVC deletion
+bug. Review this scanner's output before passing selected targets to
+`pvc-cleaner`.
 
 Affected local-store PVCs are generated from StatefulSet
 `volumeClaimTemplates` that carry `path` and `value` annotations, but miss the
@@ -9,8 +10,8 @@ labels used by the delete path. When the app or template instance is deleted,
 the StatefulSet may be removed while its PVC and bound PV remain.
 
 This scanner does not inspect StatefulSets and does not need a StatefulSet or
-template instance name. It only lists candidates and checks whether a bound PV
-still points to the candidate PVC.
+template instance name. It only lists PVC candidates and does not list or get
+PVs. PV lifecycle after PVC deletion is left to the PV reclaim policy.
 
 ## Build
 
@@ -56,7 +57,7 @@ kubectl -n template-pvc-scanner delete job template-pvc-scanner
 ```
 
 The RBAC in `deploy/rbac.yaml` is read-only and only grants list access to PVCs
-and Pods, plus get access to PVs.
+and Pods.
 
 ## Usage
 
@@ -83,25 +84,27 @@ For follow-up automation, JSON Lines emits one candidate per line:
 Structured output uses these fields:
 
 ```text
-namespace,pvc,pv,path,value,reason,pvcPhase,pvPhase,pvReclaimPolicy,pvClaimRefMatched,pvcStorageClass,pvcSize,pvcAge
+namespace,pvc,path,value,reason,pvcPhase,pvcStorageClass,pvcSize,pvcAge
 ```
 
 ## Safety Rules
 
 The scanner is PVC-only. It never lists or matches StatefulSets.
+It also never lists or gets PVs.
 
 It reports a PVC only when all of these are true:
 
 - the PVC has non-empty `path` and `value` annotations
 - the PVC has none of these ownership labels: `cloud.sealos.io/deploy-on-sealos`,
-  `cloud.sealos.io/app-deploy-manager`, `app`
+  `cloud.sealos.io/app-deploy-manager`
 - no active Pod references the PVC in the same namespace
 
 Pods in `Succeeded` or `Failed` phase are treated as terminal and do not block a
 candidate. Pending, Running, Unknown, and not-yet-phased Pods block the PVC.
 
-PV reporting is guarded. A bound PV is included only after checking whether its
-`claimRef` still points to the candidate PVC namespace, name, and UID.
+PV cleanup is intentionally not inferred by this scanner. After a PVC is
+deleted by a separate cleanup step, whether the bound PV is deleted or retained
+depends on that PV's reclaim policy.
 
 ## Options
 

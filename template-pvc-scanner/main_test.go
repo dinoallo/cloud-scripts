@@ -22,8 +22,8 @@ func TestCollectPVCOnlyTargets(t *testing.T) {
 		pvc("data-leftover-0", namespace, nil, storeAnnotations("/data", "10")),
 		pvc("data-no-annotations-0", namespace, nil, nil),
 		pvc("data-empty-path-0", namespace, nil, storeAnnotations("", "10")),
-		pvc("data-owned-app-0", namespace, map[string]string{
-			legacyAppLabelKey: "app-a",
+		pvc("data-leftover-with-app-label-0", namespace, map[string]string{
+			"app": "app-a",
 		}, storeAnnotations("/data", "10")),
 		pvc("data-owned-template-0", namespace, map[string]string{
 			templateDeployKey: "instance-a",
@@ -38,11 +38,14 @@ func TestCollectPVCOnlyTargets(t *testing.T) {
 		namespacedName(namespace, "data-in-use-0"): {},
 	})
 
-	if len(targets) != 1 {
-		t.Fatalf("expected exactly one PVC-only target, got %d: %#v", len(targets), targets)
+	if len(targets) != 2 {
+		t.Fatalf("expected exactly two PVC-only targets, got %d: %#v", len(targets), targets)
 	}
 	if targets[0].name != "data-leftover-0" {
 		t.Fatalf("expected data-leftover-0, got %s", targets[0].name)
+	}
+	if targets[1].name != "data-leftover-with-app-label-0" {
+		t.Fatalf("expected data-leftover-with-app-label-0, got %s", targets[1].name)
 	}
 	if targets[0].path != "/data" {
 		t.Fatalf("expected path /data, got %s", targets[0].path)
@@ -136,14 +139,10 @@ func TestWriteOutputCSV(t *testing.T) {
 	row := recordByHeader(t, records[0], records[1])
 	assertField(t, row, "namespace", "prod")
 	assertField(t, row, "pvc", "data-mysql-0")
-	assertField(t, row, "pv", "pv-data-mysql-0")
 	assertField(t, row, "path", "/data")
 	assertField(t, row, "value", "10")
 	assertField(t, row, "reason", "test reason")
 	assertField(t, row, "pvcPhase", "Bound")
-	assertField(t, row, "pvPhase", "Bound")
-	assertField(t, row, "pvReclaimPolicy", "Retain")
-	assertField(t, row, "pvClaimRefMatched", "true")
 	assertField(t, row, "pvcStorageClass", "fast")
 	assertField(t, row, "pvcSize", "10Gi")
 	assertField(t, row, "pvcAge", "2d1h")
@@ -171,9 +170,6 @@ func TestWriteOutputJSONL(t *testing.T) {
 	}
 	if row.Path != "/data" {
 		t.Fatalf("expected path /data, got %s", row.Path)
-	}
-	if !row.PVClaimRefMatched {
-		t.Fatal("expected pvClaimRefMatched to be true")
 	}
 	if row.PVCAge != "2d1h" {
 		t.Fatalf("expected pvcAge 2d1h, got %s", row.PVCAge)
@@ -267,18 +263,6 @@ func outputTarget(now time.Time) targetPVC {
 				Phase: corev1.ClaimBound,
 			},
 		},
-		pv: &corev1.PersistentVolume{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "pv-data-mysql-0",
-			},
-			Spec: corev1.PersistentVolumeSpec{
-				PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
-			},
-			Status: corev1.PersistentVolumeStatus{
-				Phase: corev1.VolumeBound,
-			},
-		},
-		pvClaimRefMatched: true,
 	}
 }
 

@@ -1,14 +1,15 @@
 # template-pvc-scanner
 
-扫描 Sealos 模板商店 / applaunchpad PVC 删除 bug 遗留的 PVC/PV 候选对象。
-这是 `template-pvc-cleaner` 的只读配套工具。
+扫描 Sealos 模板商店 / applaunchpad PVC 删除 bug 遗留的 PVC 候选对象。
+人工审核 scanner 输出后，再把选中的目标交给 `pvc-cleaner`。
 
 受影响的本地存储 PVC 来自 StatefulSet `volumeClaimTemplates`。这些模板带有
 `path` 和 `value` annotations，但缺少删除逻辑依赖的归属 labels。应用或模板
 实例删除后，StatefulSet 可能已经被删掉，但它创建的 PVC 和绑定 PV 仍然残留。
 
 该 scanner 不查询 StatefulSet，也不需要 StatefulSet 名称或 template instance
-名称。它只列出候选对象，并检查绑定 PV 的 `claimRef` 是否仍指向该 PVC。
+名称。它只列出 PVC 候选对象，不会 list 或 get PV。PVC 删除后 PV 是否删除或保留，
+交给 PV reclaim policy 决定。
 
 ## 构建
 
@@ -52,7 +53,7 @@ kubectl -n template-pvc-scanner cp "$pod:/scan-output/pvc-scan.csv" ./pvc-scan.c
 kubectl -n template-pvc-scanner delete job template-pvc-scanner
 ```
 
-`deploy/rbac.yaml` 是只读权限，只允许 list PVC 和 Pod，以及 get PV。
+`deploy/rbac.yaml` 是只读权限，只允许 list PVC 和 Pod。
 
 ## 用法
 
@@ -79,25 +80,25 @@ kubectl -n template-pvc-scanner delete job template-pvc-scanner
 结构化输出字段如下：
 
 ```text
-namespace,pvc,pv,path,value,reason,pvcPhase,pvPhase,pvReclaimPolicy,pvClaimRefMatched,pvcStorageClass,pvcSize,pvcAge
+namespace,pvc,path,value,reason,pvcPhase,pvcStorageClass,pvcSize,pvcAge
 ```
 
 ## 安全规则
 
-scanner 是 PVC-only 模式。它不会 list 或匹配 StatefulSet。
+scanner 是 PVC-only 模式。它不会 list 或匹配 StatefulSet，也不会 list 或 get PV。
 
 只有同时满足以下条件的 PVC 才会被输出：
 
 - PVC 有非空 `path` 和 `value` annotations
 - PVC 没有这些归属 labels：`cloud.sealos.io/deploy-on-sealos`、
-  `cloud.sealos.io/app-deploy-manager`、`app`
+  `cloud.sealos.io/app-deploy-manager`
 - 同 namespace 下没有活跃 Pod 引用该 PVC
 
 `Succeeded` 或 `Failed` phase 的 Pod 会被视为已结束，不会阻止候选输出。
 Pending、Running、Unknown 以及还没有 phase 的 Pod 都会阻止该 PVC 输出。
 
-PV 信息也有保护：只有在检查其 `claimRef` 是否仍指向候选 PVC 的 namespace、
-name 和 UID 后，才会输出匹配状态。
+scanner 不判断 PV 是否应该清理。PVC 被后续清理步骤删除后，绑定 PV 是删除还是
+保留，由该 PV 的 reclaim policy 决定。
 
 ## 参数
 
