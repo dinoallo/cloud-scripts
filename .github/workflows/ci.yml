@@ -28,6 +28,7 @@ jobs:
           - check-apiserver-access-candidates
           - template-pvc-scanner
           - pvc-cleaner
+          - system-pod-restarter
           - orphaned-pvc-scanner
     steps:
       - name: Checkout

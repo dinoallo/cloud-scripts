@@ -21,6 +21,7 @@ on:
           - check-apiserver-access-candidates
           - template-pvc-scanner
           - pvc-cleaner
+          - system-pod-restarter
           - orphaned-pvc-scanner
 
 concurrency:
@@ -61,6 +62,7 @@ jobs:
             {"app_dir":"check-apiserver-access-candidates","image":"check-apiserver-access-candidates","dockerfile":"./Dockerfile"},
             {"app_dir":"template-pvc-scanner","image":"template-pvc-scanner","dockerfile":"./template-pvc-scanner/Dockerfile"},
             {"app_dir":"pvc-cleaner","image":"pvc-cleaner","dockerfile":"./Dockerfile"},
+            {"app_dir":"system-pod-restarter","image":"system-pod-restarter","dockerfile":"./Dockerfile"},
             {"app_dir":"orphaned-pvc-scanner","image":"orphaned-pvc-scanner","dockerfile":"./Dockerfile"}
           ]'
 
