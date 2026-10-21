@@ -29,6 +29,7 @@ jobs:
           - template-pvc-scanner
           - pvc-cleaner
           - system-pod-restarter
+          - non-default-sa-token-restarter
           - orphaned-pvc-scanner
     steps:
       - name: Checkout

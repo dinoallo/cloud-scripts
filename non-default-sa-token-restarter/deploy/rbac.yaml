@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: non-default-sa-token-restarter
+  namespace: non-default-sa-token-restarter
+  labels:
+    app.kubernetes.io/name: non-default-sa-token-restarter
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: non-default-sa-token-restarter
+  labels:
+    app.kubernetes.io/name: non-default-sa-token-restarter
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "serviceaccounts", "secrets"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: non-default-sa-token-restarter
+  labels:
+    app.kubernetes.io/name: non-default-sa-token-restarter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: non-default-sa-token-restarter
+subjects:
+  - kind: ServiceAccount
+    name: non-default-sa-token-restarter
+    namespace: non-default-sa-token-restarter

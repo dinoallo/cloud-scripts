@@ -22,6 +22,7 @@ on:
           - template-pvc-scanner
           - pvc-cleaner
           - system-pod-restarter
+          - non-default-sa-token-restarter
           - orphaned-pvc-scanner
 
 concurrency:
@@ -63,6 +64,7 @@ jobs:
             {"app_dir":"template-pvc-scanner","image":"template-pvc-scanner","dockerfile":"./template-pvc-scanner/Dockerfile"},
             {"app_dir":"pvc-cleaner","image":"pvc-cleaner","dockerfile":"./Dockerfile"},
             {"app_dir":"system-pod-restarter","image":"system-pod-restarter","dockerfile":"./Dockerfile"},
+            {"app_dir":"non-default-sa-token-restarter","image":"non-default-sa-token-restarter","dockerfile":"./Dockerfile"},
             {"app_dir":"orphaned-pvc-scanner","image":"orphaned-pvc-scanner","dockerfile":"./Dockerfile"}
           ]'
 
